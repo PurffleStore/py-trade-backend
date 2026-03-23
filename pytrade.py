@@ -49,7 +49,7 @@ REFRESH_DAYS    = int(os.environ.get("REFRESH_DAYS", "7"))      # 7 days
 # Allow your Angular Space + local dev
 FRONTEND_ORIGIN = os.environ.get(
     "FRONTEND_ORIGIN",
-    "https://pykara-py-trade.static.hf.space,http://localhost:4200,https://localhost:4200,http://localhost:57205"
+    "https://py-trade-backend-production.up.railway.app,http://localhost:4200,https://localhost:4200,http://localhost:57205"
 )
 
 allowed = [o.strip() for o in FRONTEND_ORIGIN.split(",") if o.strip()]
