@@ -1,0 +1,69 @@
+# -----------------------
+# VCS / metadata
+# -----------------------
+.git
+.gitignore
+
+# -----------------------
+# Python build artefacts
+# -----------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.coverage
+.pytest_cache/
+pytest_cache/
+htmlcov/
+.tox/
+
+# -----------------------
+# Virtual environments
+# -----------------------
+.venv/
+venv/
+env/
+ENV/
+
+# -----------------------
+# OS / Editor files
+# -----------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.iml
+
+# -----------------------
+# App caches / local data
+# -----------------------
+cache/
+wheels/
+logs/
+tmp/
+temp/
+
+# Optional large/local data (uncomment if not needed in image)
+# data/
+# datasets/
+# models/
+# checkpoints/
+# nltk_data/
+# *.pt
+# *.pth
+# *.pkl
+# *.joblib
+# *.sqlite
+# *.db
+
+# -----------------------
+# Node (if present)
+# -----------------------
+node_modules/
+
+# -----------------------
+# Env files / secrets
+# -----------------------
+.env
+.env.*

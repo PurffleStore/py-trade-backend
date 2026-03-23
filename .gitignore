@@ -1,0 +1,107 @@
+# -----------------------
+# Python / Flask basics
+# -----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing / coverage
+.pytest_cache/
+pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs & PIDs
+logs/
+*.log
+*.pid
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+*.code-workspace
+
+# -----------------------
+# App-specific
+# -----------------------
+
+# Local environment files (keep examples if you want)
+.env
+.env.*
+!.env.example
+
+# Credentials / keys (VERY IMPORTANT)
+*.pem
+*.p12
+*.key
+*.crt
+*.cer
+*.der
+*.pfx
+*.enc
+*service-account*.json
+*credentials*.json
+*credential*.json
+*-sa.json
+*secret*.json
+learnenglish-ai-*.json
+gcloud*.json
+
+# Media / generated assets
+static/videos/
+static/audio/
+static/transcripts/
+uploads/
+tmp/
+temp/
+*.tmp
+
+# MoviePy / temp renders (keep source code, ignore big artifacts)
+# (If you actually want to commit sample media, remove these)
+*.moviepy_temp*
+
+
+
+# Build caches / wheels
+cache/
+wheels/
+
+# Data / models you don’t want in git
+data/
+datasets/
+models/
+checkpoints/
+*.pt
+*.pth
+*.pkl
+*.joblib
+*.sqlite
+*.db
+
+# NLTK and similar local data
+nltk_data/
+
+# Node stuff (in case)
+node_modules/
+
