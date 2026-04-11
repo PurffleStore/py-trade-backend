@@ -7,6 +7,10 @@ import json
 import datetime
 from typing import List, Dict, Optional, Tuple, Callable
 
+# Load .env file automatically for local development
+from dotenv import load_dotenv
+load_dotenv()
+
 import pyodbc
 import jwt  # PyJWT
 from flask import Flask, request, jsonify, Response, make_response
@@ -24,7 +28,7 @@ from list import (
     search_companies,     # global search helper
 )
 from assistant import get_answer
-#from signin import get_db_connection, ensure_user_table_exists  # <- NOTE: from db.py
+from signin import get_db_connection, ensure_user_table_exists  # <- NOTE: from db.py
 import bcrypt  # pip install bcrypt
 from typing import Tuple
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -46,22 +50,17 @@ app.config["JWT_SECRET"] = os.environ.get(
 ACCESS_MINUTES  = int(os.environ.get("ACCESS_MINUTES", "15"))   # 15 minutes
 REFRESH_DAYS    = int(os.environ.get("REFRESH_DAYS", "7"))      # 7 days
 
-# Allow your Angular Space + local dev
-FRONTEND_ORIGIN = os.environ.get(
-    "FRONTEND_ORIGIN",
-    "https://pykara.ai,https://www.pykara.ai,http://localhost:4200,https://localhost:4200,http://localhost:57205"
-)
-
-allowed = [o.strip() for o in FRONTEND_ORIGIN.split(",") if o.strip()]
+# CORS — allow all origins so any frontend domain (Hostinger, HF Space, localhost) works.
+# Credentials (cookies) are sent via Authorization header instead of cookies in production.
 CORS(
     app,
-    resources={r"/*": {"origins": allowed}},
-    supports_credentials=True,           # allow cookies
-    expose_headers=["Authorization"],    # allow SPA to read Authorization if needed
+    resources={r"/*": {"origins": "*"}},
+    supports_credentials=False,
+    expose_headers=["Authorization"],
 )
 
 # Ensure table exists at startup
-#ensure_user_table_exists()
+ensure_user_table_exists()
 
 # register AI TA routes blueprint
 try:
@@ -322,11 +321,9 @@ def route_search_companies():
         return jsonify({"error": f"Unexpected error: {e}"}), 500
 
 @app.route('/analysestock', methods=['POST'])
-# @jwt_required
-
 def analyze_all():
     """
-    Protected example. Requires a valid access token (Bearer or cookie).
+    Analyse stocks for the given ticker symbols.
     """
     try:
         data = request.get_json(force=True)
@@ -341,8 +338,10 @@ def analyze_all():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/chat", methods=["POST"])
+@app.route("/chat", methods=["POST", "OPTIONS"])
 def chat():
+    if request.method == "OPTIONS":
+        return ("", 204)
     data = request.get_json(silent=True) or {}
     user_message = (data.get("message") or "").strip()
     if not user_message:
@@ -352,115 +351,119 @@ def chat():
         reply = get_answer(user_message)
         return jsonify({"answer": reply})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.exception("chat error: %s", e)
+        return jsonify({
+            "answer": "I encountered an error while processing your question. Please try again.",
+            "error": str(e)
+        }), 200  # return 200 so frontend shows the message instead of error state
 
 # ------------------------------------------------------------------------------
 # Auth: Sign-up / Sign-in with JWT (no Google)
 # ------------------------------------------------------------------------------
-# @app.route('/signup', methods=['POST'])
-# def sign_up():
-#     data = request.json or {}
-#     name = (data.get('name') or "").strip()
-#     phone = (data.get('phone') or "").strip()
-#     email = (data.get('email') or "").strip().lower()
-#     password = data.get('password') or ""
+@app.route('/signup', methods=['POST'])
+def sign_up():
+    data = request.json or {}
+    name = (data.get('name') or "").strip()
+    phone = (data.get('phone') or "").strip()
+    email = (data.get('email') or "").strip().lower()
+    password = data.get('password') or ""
 
-#     if not email or not password:
-#         return jsonify({"message": "Email and password are required"}), 400
+    if not email or not password:
+        return jsonify({"message": "Email and password are required"}), 400
 
-#     conn = get_db_connection()
-#     try:
-#         cursor = conn.cursor()
-#         cursor.execute('SELECT 1 FROM Users WHERE email = ?', (email,))
-#         if cursor.fetchone():
-#             return jsonify({"message": "Email already in use"}), 400
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM Users WHERE email = ?', (email,))
+        if cursor.fetchone():
+            return jsonify({"message": "Email already in use"}), 400
 
-#         # create Werkzeug PBKDF2 hash explicitly
-#         hashed_password = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
+        # create Werkzeug PBKDF2 hash explicitly
+        hashed_password = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
 
-#         cursor.execute(
-#             'INSERT INTO Users (name, phone, email, password) VALUES (?, ?, ?, ?)',
-#             (name, phone, email, hashed_password)
-#         )
-#         conn.commit()
-#         return jsonify({"message": "User created successfully"}), 201
-#     finally:
-#         try: cursor.close()
-#         except: pass
-#         conn.close()
+        cursor.execute(
+            'INSERT INTO Users (name, phone, email, password) VALUES (?, ?, ?, ?)',
+            (name, phone, email, hashed_password)
+        )
+        conn.commit()
+        return jsonify({"message": "User created successfully"}), 201
+    finally:
+        try: cursor.close()
+        except: pass
+        conn.close()
 
-# def _do_signin(email: str, password: str):
-#     conn = get_db_connection()
-#     try:
-#         cursor = conn.cursor()
-#         cursor.execute('SELECT id, name, email, password FROM Users WHERE email = ?', (email,))
-#         row = cursor.fetchone()
-#         if not row:
-#             return None
+def _do_signin(email: str, password: str):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, email, password FROM Users WHERE email = ?', (email,))
+        row = cursor.fetchone()
+        if not row:
+            return None
 
-#         user_id, name, email_db, stored_pw = row[0], row[1], row[2], row[3] or ""
+        user_id, name, email_db, stored_pw = row[0], row[1], row[2], row[3] or ""
 
-#         ok, scheme = _safe_check_password(stored_pw, password)
-#         if not ok:
-#             return None
+        ok, scheme = _safe_check_password(stored_pw, password)
+        if not ok:
+            return None
 
-#         # If the stored hash was legacy (bcrypt/plain), migrate it now
-#         if scheme != "werkzeug":
-#             new_hash = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
-#             try:
-#                 cursor.execute('UPDATE Users SET password = ? WHERE id = ?', (new_hash, user_id))
-#                 conn.commit()
-#             except Exception:
-#                 # If migration fails, still allow login this time
-#                 pass
+        # If the stored hash was legacy (bcrypt/plain), migrate it now
+        if scheme != "werkzeug":
+            new_hash = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
+            try:
+                cursor.execute('UPDATE Users SET password = ? WHERE id = ?', (new_hash, user_id))
+                conn.commit()
+            except Exception:
+                # If migration fails, still allow login this time
+                pass
 
-#         return {"userId": int(user_id), "name": name, "email": email_db}
-#     finally:
-#         try:
-#             cursor.close()
-#         except:
-#             pass
-#         conn.close()
+        return {"userId": int(user_id), "name": name, "email": email_db}
+    finally:
+        try:
+            cursor.close()
+        except:
+            pass
+        conn.close()
 
 
-# @app.route('/signin', methods=['POST'])
-# def sign_in():
-#     """
-#     Sign in with email + password.
-#     Returns access & refresh tokens in both:
-#       - HttpOnly cookies (recommended), and
-#       - JSON body (for SPA storage if you choose).
-#     """
-#     data = request.json or {}
-#     email = (data.get('email') or "").strip().lower()
-#     password = data.get('password') or ""
+@app.route('/signin', methods=['POST'])
+def sign_in():
+    """
+    Sign in with email + password.
+    Returns access & refresh tokens in both:
+      - HttpOnly cookies (recommended), and
+      - JSON body (for SPA storage if you choose).
+    """
+    data = request.json or {}
+    email = (data.get('email') or "").strip().lower()
+    password = data.get('password') or ""
 
-#     if not email or not password:
-#         return jsonify({"message": "Email and password are required"}), 400
+    if not email or not password:
+        return jsonify({"message": "Email and password are required"}), 400
 
-#     user = _do_signin(email, password)
-#     if not user:
-#         return jsonify({"message": "Invalid email or password"}), 401
+    user = _do_signin(email, password)
+    if not user:
+        return jsonify({"message": "Invalid email or password"}), 401
 
-#     access_token = create_access_token(user_id=user["userId"], email=user["email"], name=user["name"])
-#     refresh_token = create_refresh_token(user_id=user["userId"], email=user["email"])
+    access_token = create_access_token(user_id=user["userId"], email=user["email"], name=user["name"])
+    refresh_token = create_refresh_token(user_id=user["userId"], email=user["email"])
 
-#     payload = {
-#         "message": "Signed in successfully",
-#         "userId": user["userId"],
-#         "name": user["name"],
-#         "email": user["email"],
-#         "accessToken": access_token,
-#         "refreshToken": refresh_token,
-#         "accessTokenExpiresIn": ACCESS_MINUTES * 60,
-#         "refreshTokenExpiresIn": REFRESH_DAYS * 24 * 3600,
-#     }
-#     resp = make_response(jsonify(payload), 200)
-#     set_token_cookies(resp, access_token, refresh_token)
-#     resp.headers["Authorization"] = f"Bearer {access_token}"  # optional
-#     return resp
+    payload = {
+        "message": "Signed in successfully",
+        "userId": user["userId"],
+        "name": user["name"],
+        "email": user["email"],
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "accessTokenExpiresIn": ACCESS_MINUTES * 60,
+        "refreshTokenExpiresIn": REFRESH_DAYS * 24 * 3600,
+    }
+    resp = make_response(jsonify(payload), 200)
+    set_token_cookies(resp, access_token, refresh_token)
+    resp.headers["Authorization"] = f"Bearer {access_token}"  # optional
+    return resp
 
-# @app.post("/refresh")
+@app.post("/refresh")
 def refresh():
     """
     Rotate access token using refresh_token cookie (HttpOnly).
@@ -500,7 +503,7 @@ def refresh():
         return jsonify({"message": "Invalid refresh token"}), 401
 
 @app.get("/me")
-# @jwt_required
+@jwt_required
 def me():
     """
     Returns the current user's profile if the access token is valid.
@@ -521,8 +524,8 @@ def logout():
 #community forum to post the data
 
 # --- Add this API anywhere below other routes ---
-# @app.post("/posts")
-# @jwt_required
+@app.post("/posts")
+@jwt_required
 def create_community_post():
     """
     TEMP: Open endpoint. Expects JSON:
@@ -576,7 +579,7 @@ def create_community_post():
         conn.close()
 
 
-# @app.get("/posts")
+@app.get("/posts")
 def list_community_posts():
     """
     List community posts (public). Supports paging:
@@ -649,7 +652,195 @@ def list_community_posts():
         except:
             pass
         conn.close()
-        
+
+
+# --- Community: like a post ---
+@app.post("/posts/<int:post_id>/like")
+def like_post(post_id: int):
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE Community SET like_count = ISNULL(like_count,0) + 1 WHERE id = ?", (post_id,))
+        conn.commit()
+        cur.execute("SELECT ISNULL(like_count,0) FROM Community WHERE id = ?", (post_id,))
+        row = cur.fetchone()
+        return jsonify({"likeCount": int(row[0]) if row else 0}), 200
+    except Exception as e:
+        app.logger.exception("like_post failed")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if cur: cur.close()
+        except: pass
+        conn.close()
+
+
+# --- Community: dislike a post ---
+@app.post("/posts/<int:post_id>/dislike")
+def dislike_post(post_id: int):
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE Community SET dislike_count = ISNULL(dislike_count,0) + 1 WHERE id = ?", (post_id,))
+        conn.commit()
+        cur.execute("SELECT ISNULL(dislike_count,0) FROM Community WHERE id = ?", (post_id,))
+        row = cur.fetchone()
+        return jsonify({"dislikeCount": int(row[0]) if row else 0}), 200
+    except Exception as e:
+        app.logger.exception("dislike_post failed")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if cur: cur.close()
+        except: pass
+        conn.close()
+
+
+# --- Community: add comment to a post ---
+@app.post("/posts/<int:post_id>/comments")
+@jwt_required
+def add_comment(post_id: int):
+    data = request.get_json(silent=True) or {}
+    body = (data.get("body") or "").strip()
+    if not body:
+        return jsonify({"error": "body is required"}), 400
+
+    # derive author from JWT
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    user_name = "Guest"
+    try:
+        import jwt as pyjwt
+        payload = pyjwt.decode(token, options={"verify_signature": False})
+        user_name = (payload.get("name") or payload.get("preferred_username") or
+                     " ".join(filter(None, [payload.get("given_name"), payload.get("family_name")])) or "Guest")
+    except Exception:
+        pass
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        # ensure CommunityComments table exists
+        cur.execute("""
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='CommunityComments')
+            CREATE TABLE CommunityComments (
+                id         INT IDENTITY PRIMARY KEY,
+                post_id    INT NOT NULL,
+                user_name  NVARCHAR(120),
+                body       NVARCHAR(MAX),
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        cur.execute("""
+            INSERT INTO CommunityComments (post_id, user_name, body)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?)
+        """, (post_id, user_name, body))
+        row = cur.fetchone()
+        cur.execute("UPDATE Community SET comment_count = ISNULL(comment_count,0) + 1 WHERE id = ?", (post_id,))
+        conn.commit()
+        return jsonify({"id": int(row[0]) if row else 0, "message": "Comment added"}), 201
+    except Exception as e:
+        app.logger.exception("add_comment failed")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if cur: cur.close()
+        except: pass
+        conn.close()
+
+
+# --- Community: get comments for a post ---
+@app.get("/posts/<int:post_id>/comments")
+def get_comments(post_id: int):
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='CommunityComments')
+            CREATE TABLE CommunityComments (
+                id         INT IDENTITY PRIMARY KEY,
+                post_id    INT NOT NULL,
+                user_name  NVARCHAR(120),
+                body       NVARCHAR(MAX),
+                created_at DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+        cur.execute("""
+            SELECT id, user_name, body, created_at
+            FROM CommunityComments WHERE post_id = ?
+            ORDER BY created_at ASC
+        """, (post_id,))
+        rows = cur.fetchall()
+        comments = [
+            {"id": int(r[0]), "userName": r[1], "body": r[2],
+             "createdAt": r[3].isoformat() if hasattr(r[3], "isoformat") else str(r[3])}
+            for r in rows
+        ]
+        return jsonify({"postId": post_id, "comments": comments}), 200
+    except Exception as e:
+        app.logger.exception("get_comments failed")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if cur: cur.close()
+        except: pass
+        conn.close()
+
+
+# --- Community: stats ---
+@app.get("/community/stats")
+def community_stats():
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM Community")
+        total_posts = int(cur.fetchone()[0])
+        cur.execute("SELECT COUNT(DISTINCT user_name) FROM Community")
+        total_members = int(cur.fetchone()[0])
+        cur.execute("""
+            SELECT COUNT(*) FROM Community
+            WHERE created_at >= CAST(GETDATE() AS DATE)
+        """)
+        today_posts = int(cur.fetchone()[0])
+        cur.execute("""
+            SELECT TOP 5 category, COUNT(*) AS cnt
+            FROM Community WHERE category IS NOT NULL AND category <> ''
+            GROUP BY category ORDER BY cnt DESC
+        """)
+        top_cats = [{"category": r[0], "count": int(r[1])} for r in cur.fetchall()]
+        cur.execute("""
+            SELECT TOP 5 tags FROM Community
+            WHERE tags IS NOT NULL AND tags <> ''
+            ORDER BY created_at DESC
+        """)
+        tag_rows = cur.fetchall()
+        all_tags: list[str] = []
+        for rw in tag_rows:
+            for t in str(rw[0]).split(","):
+                t = t.strip().lstrip("#")
+                if t and t not in all_tags:
+                    all_tags.append(t)
+        return jsonify({
+            "totalPosts": total_posts,
+            "totalMembers": total_members,
+            "todayPosts": today_posts,
+            "topCategories": top_cats,
+            "popularTags": all_tags[:10],
+        }), 200
+    except Exception as e:
+        app.logger.exception("community_stats failed")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            if cur: cur.close()
+        except: pass
+        conn.close()
+
 
 # ------------------------------------------------------------------------------
 # Market overview values (uses yfinance)
@@ -657,85 +848,248 @@ def list_community_posts():
 @app.get("/getmarketcards")
 def get_market_cards():
     """
-    Returns a list of market overview items with live prices fetched from yfinance.
-    Each item: { title, price, chg, chgPct }
+    Returns a list of market overview items grouped by category with live prices.
+    Each item: { title, symbol, category, price, chg, chgPct }
     """
-    # map of friendly title -> yfinance symbol
-    tickers = {
-        'Gold': 'GC=F',
-        'Silver': 'SI=F',
-        'Crude Oil (Brent)': 'BZ=F',
-        'Crude Oil (WTI)': 'CL=F',
-        'Natural Gas': 'NG=F',
-        'USD/INR': 'INR=X',
-        'EUR/USD': 'EURUSD=X',
-        'GBP/USD': 'GBPUSD=X',
-        'Bitcoin': 'BTC-USD',
-        'Ethereum': 'ETH-USD',
-        'S&P 500': '^GSPC',
-        'NASDAQ': '^IXIC',
-        'DAX': '^GDAXI',
-        'Nikkei': '^N225',
-        'Copper': 'HG=F'
+    # category -> list of (title, yfinance_symbol)
+    ticker_groups = {
+        'Indices': [
+            ('S&P 500',     '^GSPC'),
+            ('NASDAQ',      '^IXIC'),
+            ('Dow Jones',   '^DJI'),
+            ('FTSE 100',    '^FTSE'),
+            ('DAX',         '^GDAXI'),
+            ('CAC 40',      '^FCHI'),
+            ('Nikkei 225',  '^N225'),
+            ('Hang Seng',   '^HSI'),
+            ('ASX 200',     '^AXJO'),
+            ('Nifty 50',    '^NSEI'),
+            ('SENSEX',      '^BSESN'),
+        ],
+        'Commodities': [
+            ('Gold',              'GC=F'),
+            ('Silver',            'SI=F'),
+            ('Crude Oil (Brent)', 'BZ=F'),
+            ('Crude Oil (WTI)',   'CL=F'),
+            ('Natural Gas',       'NG=F'),
+            ('Copper',            'HG=F'),
+            ('Platinum',          'PL=F'),
+            ('Palladium',         'PA=F'),
+            ('Wheat',             'ZW=F'),
+            ('Corn',              'ZC=F'),
+        ],
+        'Forex': [
+            ('USD/INR',  'INR=X'),
+            ('EUR/USD',  'EURUSD=X'),
+            ('GBP/USD',  'GBPUSD=X'),
+            ('USD/JPY',  'JPY=X'),
+            ('USD/CHF',  'CHF=X'),
+            ('AUD/USD',  'AUDUSD=X'),
+            ('USD/CAD',  'CAD=X'),
+            ('USD/CNY',  'CNY=X'),
+            ('EUR/GBP',  'EURGBP=X'),
+            ('EUR/JPY',  'EURJPY=X'),
+        ],
+        'Crypto': [
+            ('Bitcoin',   'BTC-USD'),
+            ('Ethereum',  'ETH-USD'),
+            ('BNB',       'BNB-USD'),
+            ('Solana',    'SOL-USD'),
+            ('XRP',       'XRP-USD'),
+            ('Cardano',   'ADA-USD'),
+            ('Dogecoin',  'DOGE-USD'),
+            ('Polygon',   'MATIC-USD'),
+            ('Avalanche', 'AVAX-USD'),
+            ('Chainlink', 'LINK-USD'),
+        ],
+        'Bonds': [
+            ('US 10Y Yield',   '^TNX'),
+            ('US 2Y Yield',    '^IRX'),
+            ('US 30Y Yield',   '^TYX'),
+            ('Germany 10Y',    '^IRDE'),
+            ('UK 10Y Gilt',    '^TNX'),
+        ],
     }
 
-    out = []
-    for title, symbol in tickers.items():
+    def fetch_quote(symbol):
         try:
             t = yf.Ticker(symbol)
-            # try to get recent close prices
             hist = None
             try:
                 hist = t.history(period="2d")
             except Exception:
                 hist = None
-
-            price = None
-            chg = None
-            chg_pct = None
-
             if hist is not None and hasattr(hist, 'empty') and not hist.empty:
                 closes = list(hist['Close'].values)
-                if len(closes) >= 2:
-                    last = float(closes[-1])
-                    prev = float(closes[-2])
-                else:
-                    last = float(closes[-1])
-                    prev = last
-                price = last
+                last = float(closes[-1])
+                prev = float(closes[-2]) if len(closes) >= 2 else last
                 chg = last - prev
                 chg_pct = (chg / prev * 100) if prev != 0 else 0.0
-            else:
-                # fallback: try fast info lookup
+                return last, chg, chg_pct
+            # fallback to ticker.info
+            info = {}
+            try:
+                info = t.info or {}
+            except Exception:
                 info = {}
-                try:
-                    info = t.info or {}
-                except Exception:
-                    info = {}
-                # try fields: 'regularMarketPrice', 'previousClose'
-                last = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
-                prev = info.get('previousClose')
-                try:
-                    if last is not None:
-                        price = float(last)
-                    if prev is not None:
-                        chg = float(last) - float(prev) if last is not None else None
-                        chg_pct = (chg / float(prev) * 100) if prev and chg is not None else None
-                except Exception:
-                    price = price or None
+            last = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+            prev = info.get('previousClose')
+            if last is not None:
+                price = float(last)
+                chg = float(last) - float(prev) if prev else 0.0
+                chg_pct = (chg / float(prev) * 100) if prev and float(prev) != 0 else 0.0
+                return price, chg, chg_pct
+        except Exception:
+            app.logger.exception('getmarketcards: failed for %s', symbol)
+        return None, None, None
 
+    out = []
+    for category, items in ticker_groups.items():
+        for title, symbol in items:
+            price, chg, chg_pct = fetch_quote(symbol)
             out.append({
                 'title': title,
                 'symbol': symbol,
+                'category': category,
                 'price': price,
                 'chg': chg,
-                'chgPct': chg_pct
+                'chgPct': chg_pct,
             })
-        except Exception as e:
-            app.logger.exception('getmarketcards: failed for %s', symbol)
-            out.append({'title': title, 'symbol': symbol, 'price': None, 'chg': None, 'chgPct': None})
 
     return jsonify(out), 200
+
+
+# ------------------------------------------------------------------------------
+# Live batch quotes for individual stocks  (NEW)
+# ------------------------------------------------------------------------------
+@app.get("/getquotes")
+def get_quotes():
+    """
+    GET /getquotes?tickers=RELIANCE.NS,TCS.NS,INFY.NS
+    Returns live price, change and day high/low for each ticker via yfinance.
+    """
+    raw = request.args.get('tickers', '')
+    if not raw:
+        return jsonify({'error': 'Missing ?tickers= parameter'}), 400
+
+    symbols = [s.strip().upper() for s in raw.split(',') if s.strip()]
+    if not symbols:
+        return jsonify([]), 200
+
+    out = []
+    for sym in symbols:
+        try:
+            t = yf.Ticker(sym)
+            hist = None
+            try:
+                hist = t.history(period='2d')
+            except Exception:
+                hist = None
+
+            price = chg = chg_pct = high = low = None
+
+            if hist is not None and hasattr(hist, 'empty') and not hist.empty:
+                closes = list(hist['Close'].values)
+                highs  = list(hist['High'].values)
+                lows   = list(hist['Low'].values)
+                last = float(closes[-1])
+                prev = float(closes[-2]) if len(closes) >= 2 else last
+                price   = last
+                chg     = last - prev
+                chg_pct = (chg / prev * 100) if prev != 0 else 0.0
+                high    = float(highs[-1])
+                low     = float(lows[-1])
+            else:
+                info = {}
+                try:
+                    info = t.fast_info or {}
+                    price   = float(info.get('last_price') or info.get('regularMarketPrice') or 0) or None
+                    high    = float(info.get('day_high')   or 0) or None
+                    low     = float(info.get('day_low')    or 0) or None
+                    prev    = float(info.get('previous_close') or price or 0)
+                    chg     = (price - prev) if price and prev else None
+                    chg_pct = (chg / prev * 100) if chg and prev and prev != 0 else None
+                except Exception:
+                    pass
+
+            out.append({
+                'symbol':   sym,
+                'price':    price,
+                'chg':      chg,
+                'chgPct':   chg_pct,
+                'high':     high,
+                'low':      low,
+            })
+        except Exception:
+            app.logger.exception('getquotes: failed for %s', sym)
+            out.append({'symbol': sym, 'price': None, 'chg': None, 'chgPct': None, 'high': None, 'low': None})
+
+    return jsonify(out), 200
+
+
+# ------------------------------------------------------------------------------
+# Intraday price series for chart  (NEW)
+# ------------------------------------------------------------------------------
+@app.get("/getintraday")
+def get_intraday():
+    """
+    GET /getintraday?symbol=RELIANCE.NS&range=1d&interval=1m
+    Returns close prices with ISO timestamps for intraday area chart.
+    range:    1d | 5d | 1mo
+    interval: 1m | 5m | 15m | 1h
+    """
+    symbol   = request.args.get('symbol', '').strip()
+    range_p  = request.args.get('range',    '1d')
+    interval = request.args.get('interval', '5m')
+
+    if not symbol:
+        return jsonify({'error': 'Missing ?symbol= parameter'}), 400
+
+    # safe interval/range combinations yfinance supports
+    safe = {
+        '1d':  ['1m', '2m', '5m', '15m', '30m', '60m', '90m'],
+        '5d':  ['5m', '15m', '30m', '60m'],
+        '1mo': ['30m', '60m', '90m', '1d'],
+    }
+    if range_p not in safe:
+        range_p = '1d'
+    if interval not in safe[range_p]:
+        interval = safe[range_p][0]
+
+    try:
+        t = yf.Ticker(symbol.upper())
+        hist = t.history(period=range_p, interval=interval)
+        if hist is None or hist.empty:
+            return jsonify({'symbol': symbol, 'timestamps': [], 'closes': []}), 200
+
+        import pandas as pd
+        timestamps = []
+        for idx in hist.index:
+            try:
+                ts = pd.Timestamp(idx)
+                if ts.tzinfo is not None:
+                    ts = ts.tz_convert('UTC').tz_localize(None)
+                timestamps.append(ts.strftime('%Y-%m-%dT%H:%M'))
+            except Exception:
+                timestamps.append(str(idx))
+
+        closes = [float(v) for v in hist['Close'].values]
+        highs  = [float(v) for v in hist['High'].values]
+        lows   = [float(v) for v in hist['Low'].values]
+
+        return jsonify({
+            'symbol':     symbol.upper(),
+            'range':      range_p,
+            'interval':   interval,
+            'timestamps': timestamps,
+            'closes':     closes,
+            'highs':      highs,
+            'lows':       lows,
+        }), 200
+
+    except Exception:
+        app.logger.exception('getintraday: failed for %s', symbol)
+        return jsonify({'symbol': symbol, 'timestamps': [], 'closes': []}), 200
 
 
 # ------------------------------------------------------------------------------
@@ -750,34 +1104,65 @@ def get_global_indices():
     # Define representative indices per country with yfinance symbols
     indices_map = {
         'India': [
-            ('Nifty 50', '^NSEI'),
-            ('SENSEX', '^BSESN'),
-            ('Nifty Bank', '^NSEBANK'),
+            ('Nifty 50',         '^NSEI'),
+            ('SENSEX',           '^BSESN'),
+            ('Nifty Bank',       '^NSEBANK'),
+            ('Nifty IT',         None),
             ('Nifty Midcap 100', None),
-            ('Nifty Smallcap 100', None),
+            ('Nifty Smallcap',   None),
         ],
         'United States': [
-            ('S&P 500', '^GSPC'),
-            ('Dow Jones', '^DJI'),
-            ('Nasdaq Composite', '^IXIC'),
-            ('S&P MidCap 400', None),
-            ('S&P SmallCap 600', None),
+            ('S&P 500',           '^GSPC'),
+            ('Dow Jones',         '^DJI'),
+            ('Nasdaq Composite',  '^IXIC'),
+            ('Russell 2000',      '^RUT'),
+            ('S&P MidCap 400',    '^MID'),
+            ('VIX',               '^VIX'),
         ],
         'United Kingdom': [
-            ('FTSE 100', '^FTSE'),
-            ('FTSE 250', None),
+            ('FTSE 100',  '^FTSE'),
+            ('FTSE 250',  '^FTMC'),
         ],
         'Germany': [
-            ('DAX', '^GDAXI'),
-            ('MDAX', None),
+            ('DAX',    '^GDAXI'),
+            ('MDAX',   '^MDAXI'),
+            ('TecDAX', '^TECDAX'),
+        ],
+        'France': [
+            ('CAC 40', '^FCHI'),
+            ('SBF 120', None),
+        ],
+        'Japan': [
+            ('Nikkei 225',  '^N225'),
+            ('TOPIX',       '^TOPX'),
+        ],
+        'China': [
+            ('Shanghai Composite', '000001.SS'),
+            ('CSI 300',            '000300.SS'),
+            ('Shenzhen',           '399001.SZ'),
+        ],
+        'Hong Kong': [
+            ('Hang Seng',      '^HSI'),
+            ('Hang Seng Tech', '^HSTECH'),
+        ],
+        'Australia': [
+            ('ASX 200',    '^AXJO'),
+            ('All Ords',   '^AORD'),
+        ],
+        'Canada': [
+            ('TSX Composite', '^GSPTSE'),
+            ('TSX 60',        '^TX60'),
+        ],
+        'Brazil': [
+            ('Bovespa', '^BVSP'),
         ],
         'Sweden': [
             ('OMX Stockholm 30', '^OMXSPI'),
         ],
         'Russia': [
             ('MOEX Russia', 'IMOEX.ME'),
-            ('RTS Index', None),
-        ]
+            ('RTS Index',   'RTSI.ME'),
+        ],
     }
 
     def build_spark_from_hist(close_vals, pts=26):

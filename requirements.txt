@@ -3,7 +3,7 @@ flask-cors
 yfinance==0.2.65
 pandas==2.3.2
 numpy==2.3.2
-TA-Lib            # we build the C lib in Dockerfile
+TA-Lib
 scikit-learn
 scipy
 joblib
@@ -16,18 +16,12 @@ nltk
 rapidfuzz
 gunicorn
 torch
-dotenv
-gunicorn
-torch
 python-dotenv
 openai>=1.0.0
+groq
 langchain
 langchain-openai
 Werkzeug==3.0.4
 pyodbc==5.1.0
 PyJWT
 bcrypt
-pyodbc==5.1.0
-
-
-
