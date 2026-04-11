@@ -59,8 +59,12 @@ CORS(
     expose_headers=["Authorization"],
 )
 
-# Ensure table exists at startup
-ensure_user_table_exists()
+# Ensure table exists at startup — wrapped so a missing DB never crashes the app
+try:
+    ensure_user_table_exists()
+except Exception as _db_err:
+    import logging
+    logging.warning("DB init skipped at startup (will retry on first request): %s", _db_err)
 
 # register AI TA routes blueprint
 try:

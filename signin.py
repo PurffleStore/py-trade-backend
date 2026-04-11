@@ -14,7 +14,7 @@ RDS_SQL_SERVER   = os.getenv("RDS_SQL_SERVER", "")
 RDS_SQL_DATABASE = os.getenv("RDS_SQL_DATABASE", "PyTrade")
 RDS_SQL_USER     = os.getenv("RDS_SQL_USER", "")
 RDS_SQL_PASSWORD = os.getenv("RDS_SQL_PASSWORD", "")
-RDS_SQL_DRIVER   = os.getenv("RDS_SQL_DRIVER", "{ODBC Driver 17 for SQL Server}")
+RDS_SQL_DRIVER   = os.getenv("RDS_SQL_DRIVER", "{ODBC Driver 18 for SQL Server}")
 RDS_ENCRYPT      = os.getenv("RDS_ENCRYPT", "yes")
 RDS_TRUST_CERT   = os.getenv("RDS_TRUST_SERVER_CERT", "yes")
 
