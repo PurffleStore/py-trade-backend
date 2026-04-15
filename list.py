@@ -140,6 +140,9 @@ def _parse_wiki_constituents(url: str, ticker_candidates, company_candidates, su
             continue
         if upper_tickers:
             s = s.upper()
+        # Strip the suffix if Wikipedia already includes it, then re-append cleanly
+        if suffix and s.endswith(suffix.upper() if upper_tickers else suffix):
+            s = s[: -len(suffix)]
         rows.append({"symbol": f"{s}{suffix}", "company": n})
     if not rows:
         raise RuntimeError("Parsed zero rows from Wikipedia table.")

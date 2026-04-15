@@ -1097,15 +1097,19 @@ def get_intraday():
 
 
 # ------------------------------------------------------------------------------
-# Global indices (uses yfinance)
+# Global indices (uses yfinance) — batch download for speed
 # ------------------------------------------------------------------------------
 @app.get("/getglobalindices")
 def get_global_indices():
     """
-    Returns a flat list of global indices for a set of countries. Each item:
-    { id, name, country, region, price, change, changePct, sparkline }
+    Returns a flat list of global indices for all supported countries.
+    Uses yf.download() batch to fetch all symbols in one round-trip (much faster
+    than per-ticker calls). Falls back to fast_info for any symbols that failed.
+    Each item: { id, name, country, region, price, change, changePct, sparkline }
     """
-    # Define representative indices per country with yfinance symbols
+    import random as _random
+
+    # Representative indices per country with yfinance symbols (None = no live feed)
     indices_map = {
         'India': [
             ('Nifty 50',         '^NSEI'),
@@ -1113,19 +1117,18 @@ def get_global_indices():
             ('Nifty Bank',       '^NSEBANK'),
             ('Nifty IT',         None),
             ('Nifty Midcap 100', None),
-            ('Nifty Smallcap',   None),
         ],
         'United States': [
-            ('S&P 500',           '^GSPC'),
-            ('Dow Jones',         '^DJI'),
-            ('Nasdaq Composite',  '^IXIC'),
-            ('Russell 2000',      '^RUT'),
-            ('S&P MidCap 400',    '^MID'),
-            ('VIX',               '^VIX'),
+            ('S&P 500',          '^GSPC'),
+            ('Dow Jones',        '^DJI'),
+            ('Nasdaq Composite', '^IXIC'),
+            ('Russell 2000',     '^RUT'),
+            ('S&P MidCap 400',   '^MID'),
+            ('VIX',              '^VIX'),
         ],
         'United Kingdom': [
-            ('FTSE 100',  '^FTSE'),
-            ('FTSE 250',  '^FTMC'),
+            ('FTSE 100', '^FTSE'),
+            ('FTSE 250', '^FTMC'),
         ],
         'Germany': [
             ('DAX',    '^GDAXI'),
@@ -1134,11 +1137,10 @@ def get_global_indices():
         ],
         'France': [
             ('CAC 40', '^FCHI'),
-            ('SBF 120', None),
         ],
         'Japan': [
-            ('Nikkei 225',  '^N225'),
-            ('TOPIX',       '^TOPX'),
+            ('Nikkei 225', '^N225'),
+            ('TOPIX',      '^TOPX'),
         ],
         'China': [
             ('Shanghai Composite', '000001.SS'),
@@ -1150,8 +1152,8 @@ def get_global_indices():
             ('Hang Seng Tech', '^HSTECH'),
         ],
         'Australia': [
-            ('ASX 200',    '^AXJO'),
-            ('All Ords',   '^AORD'),
+            ('ASX 200',  '^AXJO'),
+            ('All Ords', '^AORD'),
         ],
         'Canada': [
             ('TSX Composite', '^GSPTSE'),
@@ -1169,86 +1171,144 @@ def get_global_indices():
         ],
     }
 
-    def build_spark_from_hist(close_vals, pts=26):
-        # normalize to length pts by sampling or padding
-        arr = []
-        if not close_vals:
-            # synthetic series
-            base = 100
-            from random import random
-            arr = [max(1, base + (random() - 0.5) * base * 0.02) for _ in range(pts)]
-            return arr
-        vals = list(close_vals)
-        # if too short, pad with last
+    # ── Helper: build sparkline array of `pts` points ──────────────────────────
+    def make_spark(closes, pts=26):
+        if not closes:
+            base = 100.0
+            return [max(1.0, base + (_random.random() - 0.5) * base * 0.02) for _ in range(pts)]
+        vals = [float(v) for v in closes if v is not None and str(v) != 'nan']
+        if not vals:
+            return make_spark([], pts)
         while len(vals) < pts:
             vals.insert(0, vals[0])
         if len(vals) > pts:
-            # sample evenly
             step = len(vals) / pts
-            sampled = [vals[int(i * step)] for i in range(pts)]
-            return [float(v) for v in sampled]
-        return [float(v) for v in vals]
+            vals = [vals[int(i * step)] for i in range(pts)]
+        return vals
 
+    # ── Optional ?country= filter to fetch only one country (much faster) ──────
+    country_filter = request.args.get('country', '').strip().lower()
+    if country_filter:
+        # Match country key case-insensitively; support aliases like 'us'→'United States'
+        country_aliases = {
+            'india': 'India', 'us': 'United States', 'usa': 'United States',
+            'united states': 'United States', 'uk': 'United Kingdom',
+            'united kingdom': 'United Kingdom', 'britain': 'United Kingdom',
+            'german': 'Germany', 'germany': 'Germany', 'france': 'France',
+            'japan': 'Japan', 'china': 'China', 'hong kong': 'Hong Kong',
+            'australia': 'Australia', 'canada': 'Canada', 'brazil': 'Brazil',
+            'sweden': 'Sweden', 'russia': 'Russia',
+        }
+        resolved = country_aliases.get(country_filter)
+        if resolved and resolved in indices_map:
+            indices_map = {resolved: indices_map[resolved]}
+
+    # ── Collect all symbols that have a yfinance ticker ────────────────────────
+    all_symbols = []
+    sym_meta = {}  # symbol -> (name, country)
+    for country, items in indices_map.items():
+        for name, symbol in items:
+            if symbol:
+                all_symbols.append(symbol)
+                sym_meta[symbol] = (name, country)
+
+    # ── Batch download: ONE call for all tickers (period=5d is enough + fast) ──
+    prices = {}  # symbol -> dict(price, change, changePct, sparkline)
+
+    if all_symbols:
+        try:
+            import pandas as pd
+            df = yf.download(
+                tickers=all_symbols,
+                period='30d',
+                interval='1d',
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
+
+            if df is not None and not df.empty:
+                is_multi = isinstance(df.columns, pd.MultiIndex)
+
+                for sym in all_symbols:
+                    try:
+                        if is_multi:
+                            col = df['Close'][sym]
+                        else:
+                            col = df['Close']
+                        closes = col.dropna().tolist()
+                        if len(closes) >= 2:
+                            last = float(closes[-1])
+                            prev = float(closes[-2])
+                            chg = last - prev
+                            chg_pct = (chg / prev * 100) if prev else 0.0
+                            prices[sym] = {
+                                'price': last,
+                                'change': round(chg, 4),
+                                'changePct': round(chg_pct, 4),
+                                'sparkline': make_spark(closes[-26:]),
+                            }
+                        elif len(closes) == 1:
+                            prices[sym] = {
+                                'price': float(closes[0]),
+                                'change': 0.0,
+                                'changePct': 0.0,
+                                'sparkline': make_spark(closes),
+                            }
+                    except Exception:
+                        pass  # handled by fallback below
+        except Exception as e:
+            app.logger.warning("get_global_indices: batch download failed (%s) — trying fast_info fallback", e)
+
+    # ── Fallback: for any symbol that batch missed, try fast_info (quick) ──────
+    missing = [s for s in all_symbols if s not in prices]
+    for sym in missing:
+        try:
+            t = yf.Ticker(sym)
+            fi = t.fast_info
+            last = getattr(fi, 'last_price', None) or getattr(fi, 'regularMarketPrice', None)
+            prev = getattr(fi, 'previous_close', None) or getattr(fi, 'regularMarketPreviousClose', None)
+            if last is not None:
+                last = float(last)
+                prev_f = float(prev) if prev is not None else last
+                chg = last - prev_f
+                chg_pct = (chg / prev_f * 100) if prev_f else 0.0
+                prices[sym] = {
+                    'price': last,
+                    'change': round(chg, 4),
+                    'changePct': round(chg_pct, 4),
+                    'sparkline': make_spark([last], 26),
+                }
+        except Exception:
+            pass
+
+    # ── Build the flat output list ─────────────────────────────────────────────
     out = []
     for country, items in indices_map.items():
         for name, symbol in items:
-            price = None
-            change = None
-            change_pct = None
-            spark = []
-            try:
-                if symbol:
-                    t = yf.Ticker(symbol)
-                    hist = None
-                    try:
-                        hist = t.history(period='30d')
-                    except Exception:
-                        hist = None
-                    if hist is not None and hasattr(hist, 'empty') and not hist.empty:
-                        closes = list(hist['Close'].values)
-                        # create spark from most recent values
-                        spark = build_spark_from_hist(closes[-26:], pts=26)
-                        last = float(closes[-1])
-                        prev = float(closes[-2]) if len(closes) >= 2 else last
-                        price = last
-                        change = last - prev
-                        change_pct = (change / prev * 100) if prev != 0 else 0.0
-                    else:
-                        # try single-value info
-                        info = {}
-                        try:
-                            info = t.info or {}
-                        except Exception:
-                            info = {}
-                        last = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
-                        prev = info.get('previousClose')
-                        if last is not None:
-                            try:
-                                price = float(last)
-                            except Exception:
-                                price = None
-                        if price is not None and prev is not None:
-                            try:
-                                p = float(prev)
-                                change = float(price) - p
-                                if p != 0:
-                                    change_pct = (change / p) * 100
-                                else:
-                                    change_pct = 0.0
-                            except Exception:
-                                change_pct = None
-            except Exception:
-                app.logger.exception("get_global_indices failed for %s", name)
-            out.append({
-                "id": name,
-                "name": name,
-                "country": country,
-                "region": None,  # region???
-                "price": price,
-                "change": change,
-                "changePct": change_pct,
-                "sparkline": spark,
-            })
+            if symbol and symbol in prices:
+                p = prices[symbol]
+                out.append({
+                    'id': name,
+                    'name': name,
+                    'country': country,
+                    'region': country,   # region = country so frontend filter works
+                    'price': p['price'],
+                    'change': p['change'],
+                    'changePct': p['changePct'],
+                    'sparkline': p['sparkline'],
+                })
+            else:
+                out.append({
+                    'id': name,
+                    'name': name,
+                    'country': country,
+                    'region': country,
+                    'price': None,
+                    'change': None,
+                    'changePct': None,
+                    'sparkline': [],
+                })
 
     return jsonify(out), 200
 
