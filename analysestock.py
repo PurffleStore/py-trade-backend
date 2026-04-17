@@ -184,8 +184,9 @@ def analysestock(ticker):
     now = datetime.datetime.now()
     formatted_datetime = now.strftime('%Y-%m-%d %H:%M:%S.%f')
 
-    threshold_time = now.replace(hour=17, minute=0, second=0, microsecond=0)
-    end_date = (now + datetime.timedelta(days=1)).strftime('%Y-%m-%d') if now >= threshold_time else now.strftime('%Y-%m-%d')
+    # yfinance `end` is exclusive — always pass tomorrow so we get today's
+    # (or the most recently completed) trading session included in the data.
+    end_date = (now + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
 
     stock_data = yf.download(ticker, start="2023-01-01", end=end_date, interval="1d") 
     stock_data.columns = [col.lower() if isinstance(col, str) else col[0].lower() for col in stock_data.columns]

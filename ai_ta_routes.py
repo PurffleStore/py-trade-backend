@@ -9,6 +9,8 @@ import traceback
 from pathlib import Path
 import time
 import numpy as np
+import pandas as pd
+import math
 
 from ai_ta_model import train_and_save_model, predict_score_for_symbol
 
@@ -37,6 +39,26 @@ def _get_cached(symbol: str):
 
 def _set_cached(symbol: str, val):
     _AI_TA_CACHE[symbol] = (time.time(), val)
+
+def _sanitize_for_json(data):
+    """Convert None, NaN, inf, and other non-JSON-serializable values to safe defaults"""
+    if isinstance(data, dict):
+        return {k: _sanitize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [_sanitize_for_json(item) for item in data]
+    elif data is None:
+        return ""  # Convert None to empty string
+    # Handle Python floats, ints, numpy, and pandas numeric types
+    elif isinstance(data, (float, int, np.integer, np.floating)):
+        try:
+            # Check for NaN and infinity
+            if pd.isna(data) or (isinstance(data, (float, np.floating)) and np.isinf(data)):
+                return 0
+            # Convert numpy types to Python float if needed
+            return float(data) if isinstance(data, np.number) else data
+        except (TypeError, ValueError):
+            return 0
+    return data
 
 @bp.route('/train_model', methods=['POST'])
 def train_model():
@@ -104,6 +126,8 @@ def ai_ta_bulk():
             # mask raw error
             out[sym] = {'error': 'Analysis temporarily unavailable'}
 
+    # Sanitize response to handle None, NaN, and other non-JSON-serializable values
+    out = _sanitize_for_json(out)
     return jsonify({'results': out}), 200
 
 
