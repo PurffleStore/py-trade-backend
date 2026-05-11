@@ -66,14 +66,17 @@ def ensure_community_table_exists() -> None:
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Community' AND xtype='U')
 BEGIN
     CREATE TABLE Community (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        user_id INT NOT NULL,
-        user_name NVARCHAR(200) NOT NULL,
-        title NVARCHAR(300) NULL,
-        category NVARCHAR(100) NULL,
-        tags NVARCHAR(1000) NULL,        
-        body NVARCHAR(MAX) NOT NULL,
-        created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+        id            INT IDENTITY(1,1) PRIMARY KEY,
+        user_id       INT NOT NULL,
+        user_name     NVARCHAR(200) NOT NULL,
+        title         NVARCHAR(300) NULL,
+        category      NVARCHAR(100) NULL,
+        tags          NVARCHAR(1000) NULL,
+        body          NVARCHAR(MAX) NOT NULL,
+        like_count    INT NOT NULL DEFAULT 0,
+        dislike_count INT NOT NULL DEFAULT 0,
+        comment_count INT NOT NULL DEFAULT 0,
+        created_at    DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
     CREATE INDEX IX_Community_UserId ON Community(user_id);
     CREATE INDEX IX_Community_CreatedAt ON Community(created_at DESC);

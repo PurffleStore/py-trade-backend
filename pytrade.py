@@ -28,7 +28,7 @@ from list import (
     search_companies,     # global search helper
 )
 from assistant import get_answer
-from signin import get_db_connection, ensure_user_table_exists  # <- NOTE: from db.py
+from signin import get_db_connection, ensure_user_table_exists, ensure_community_table_exists  # <- NOTE: from db.py
 import bcrypt  # pip install bcrypt
 from typing import Tuple
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -59,12 +59,18 @@ CORS(
     expose_headers=["Authorization"],
 )
 
-# Ensure table exists at startup — wrapped so a missing DB never crashes the app
+# Ensure tables exist at startup — wrapped so a missing DB never crashes the app
 try:
     ensure_user_table_exists()
 except Exception as _db_err:
     import logging
-    logging.warning("DB init skipped at startup (will retry on first request): %s", _db_err)
+    logging.warning("DB init (users) skipped at startup: %s", _db_err)
+
+try:
+    ensure_community_table_exists()
+except Exception as _db_err:
+    import logging
+    logging.warning("DB init (community) skipped at startup: %s", _db_err)
 
 # register AI TA routes blueprint
 try:
@@ -716,7 +722,7 @@ def add_comment(post_id: int):
     user_name = "Guest"
     try:
         import jwt as pyjwt
-        payload = pyjwt.decode(token, options={"verify_signature": False})
+        payload = pyjwt.decode(token, options={"verify_signature": False}, algorithms=["HS256"])
         user_name = (payload.get("name") or payload.get("preferred_username") or
                      " ".join(filter(None, [payload.get("given_name"), payload.get("family_name")])) or "Guest")
     except Exception:
