@@ -62,6 +62,7 @@ def ensure_community_table_exists() -> None:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        # Create table if it doesn't exist
         cursor.execute("""
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Community' AND xtype='U')
 BEGIN
@@ -82,6 +83,23 @@ BEGIN
     CREATE INDEX IX_Community_CreatedAt ON Community(created_at DESC);
 END
         """)
+        conn.commit()
+        # Add any missing columns for tables created by older deployments
+        missing_cols = [
+            ("like_count",    "INT NOT NULL DEFAULT 0"),
+            ("dislike_count", "INT NOT NULL DEFAULT 0"),
+            ("comment_count", "INT NOT NULL DEFAULT 0"),
+        ]
+        for col_name, col_def in missing_cols:
+            cursor.execute("""
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME='Community' AND COLUMN_NAME=?
+)
+BEGIN
+    EXEC('ALTER TABLE Community ADD {} {}')
+END
+            """.format(col_name, col_def), (col_name,))
         conn.commit()
     finally:
         try: cursor.close()

@@ -596,6 +596,10 @@ def list_community_posts():
       GET /posts?limit=50&offset=0
     Returns: { total, offset, limit, count, results: Post[] }
     """
+    try:
+        ensure_community_table_exists()
+    except Exception:
+        pass
     limit_raw = request.args.get("limit", "50")
     offset_raw = request.args.get("offset", "0")
     try:
@@ -804,6 +808,10 @@ def get_comments(post_id: int):
 # --- Community: stats ---
 @app.get("/community/stats")
 def community_stats():
+    try:
+        ensure_community_table_exists()
+    except Exception:
+        pass
     conn = get_db_connection()
     cur = None
     try:
@@ -829,7 +837,7 @@ def community_stats():
             ORDER BY created_at DESC
         """)
         tag_rows = cur.fetchall()
-        all_tags: list[str] = []
+        all_tags = []
         for rw in tag_rows:
             for t in str(rw[0]).split(","):
                 t = t.strip().lstrip("#")
