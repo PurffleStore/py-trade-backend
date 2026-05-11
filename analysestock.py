@@ -197,6 +197,12 @@ def analysestock(ticker):
     price_change = stockdetail.info['regularMarketChange']
     percentage_change = stockdetail.info['regularMarketChangePercent']
 
+    week52_high = round(float(stockdetail.info.get("fiftyTwoWeekHigh") or 0), 2)
+    week52_low  = round(float(stockdetail.info.get("fiftyTwoWeekLow")  or 0), 2)
+    _range = week52_high - week52_low
+    week52_position = round((live_price - week52_low) / _range * 100, 1) if _range > 0 else 0.0
+    week52_signal = "Near High" if week52_position >= 80 else ("Near Low" if week52_position <= 20 else "Mid Range")
+
     recentdays = stock_data.tail(30)
     ohlc_data = []
     for index, row in recentdays.iterrows():
@@ -342,6 +348,10 @@ def analysestock(ticker):
         "combined_overall_score": round(combined_overall_score, 2),
         "combined_overall_signal": str(combined_overall_signal),
         "tradingInfo": pivot_levels,
+        "week52_high": week52_high,
+        "week52_low": week52_low,
+        "week52_position": week52_position,
+        "week52_signal": week52_signal,
 
         "RSI 14": rsi_trade_signal['rsi_14_last_2_years'],
         "RSI 5": rsi_trade_signal['rsi_5_last_2_years'],

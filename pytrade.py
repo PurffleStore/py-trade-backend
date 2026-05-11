@@ -805,6 +805,45 @@ def get_comments(post_id: int):
         conn.close()
 
 
+# --- Community: DB health check (temp debug endpoint) ---
+@app.get("/community/health")
+def community_health():
+    """Temp endpoint — open in browser to see exact DB error on live server."""
+    steps = []
+    try:
+        conn = get_db_connection()
+        steps.append("db_connect: OK")
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        steps.append("db_ping: OK")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        steps.append(f"db_connect: FAILED — {e}")
+        return jsonify({"status": "error", "steps": steps}), 500
+
+    try:
+        ensure_community_table_exists()
+        steps.append("ensure_table: OK")
+    except Exception as e:
+        steps.append(f"ensure_table: FAILED — {e}")
+        return jsonify({"status": "error", "steps": steps}), 500
+
+    try:
+        conn2 = get_db_connection()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT COUNT(*) FROM Community")
+        count = cur2.fetchone()[0]
+        cur2.close()
+        conn2.close()
+        steps.append(f"select_community: OK (rows={count})")
+    except Exception as e:
+        steps.append(f"select_community: FAILED — {e}")
+        return jsonify({"status": "error", "steps": steps}), 500
+
+    return jsonify({"status": "ok", "steps": steps}), 200
+
+
 # --- Community: stats ---
 @app.get("/community/stats")
 def community_stats():
