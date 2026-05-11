@@ -57,50 +57,65 @@ def ensure_user_table_exists():
         conn.close()
 
 
-# --- Add below existing ensure_user_table_exists() call ---
 def ensure_community_table_exists() -> None:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # Create table if it doesn't exist
+
+        # Step 1: Create table — single statement, same pattern as ensure_user_table_exists
         cursor.execute("""
-IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Community' AND xtype='U')
-BEGIN
-    CREATE TABLE Community (
-        id            INT IDENTITY(1,1) PRIMARY KEY,
-        user_id       INT NOT NULL,
-        user_name     NVARCHAR(200) NOT NULL,
-        title         NVARCHAR(300) NULL,
-        category      NVARCHAR(100) NULL,
-        tags          NVARCHAR(1000) NULL,
-        body          NVARCHAR(MAX) NOT NULL,
-        like_count    INT NOT NULL DEFAULT 0,
-        dislike_count INT NOT NULL DEFAULT 0,
-        comment_count INT NOT NULL DEFAULT 0,
-        created_at    DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-    CREATE INDEX IX_Community_UserId ON Community(user_id);
-    CREATE INDEX IX_Community_CreatedAt ON Community(created_at DESC);
-END
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Community' AND xtype='U')
+                CREATE TABLE Community (
+                    id            INT IDENTITY(1,1) PRIMARY KEY,
+                    user_id       INT NOT NULL,
+                    user_name     NVARCHAR(200) NOT NULL,
+                    title         NVARCHAR(300) NULL,
+                    category      NVARCHAR(100) NULL,
+                    tags          NVARCHAR(1000) NULL,
+                    body          NVARCHAR(MAX) NOT NULL,
+                    like_count    INT NOT NULL DEFAULT 0,
+                    dislike_count INT NOT NULL DEFAULT 0,
+                    comment_count INT NOT NULL DEFAULT 0,
+                    created_at    DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+                )
         """)
         conn.commit()
-        # Add any missing columns for tables created by older deployments
-        missing_cols = [
-            ("like_count",    "INT NOT NULL DEFAULT 0"),
-            ("dislike_count", "INT NOT NULL DEFAULT 0"),
-            ("comment_count", "INT NOT NULL DEFAULT 0"),
-        ]
-        for col_name, col_def in missing_cols:
-            cursor.execute("""
-IF NOT EXISTS (
-    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_NAME='Community' AND COLUMN_NAME=?
-)
-BEGIN
-    EXEC('ALTER TABLE Community ADD {} {}')
-END
-            """.format(col_name, col_def), (col_name,))
+
+        # Step 2: Indexes — each in its own execute so the table is visible
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_Community_UserId' AND object_id=OBJECT_ID('Community'))
+                CREATE INDEX IX_Community_UserId ON Community(user_id)
+        """)
         conn.commit()
+
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_Community_CreatedAt' AND object_id=OBJECT_ID('Community'))
+                CREATE INDEX IX_Community_CreatedAt ON Community(created_at)
+        """)
+        conn.commit()
+
+        # Step 3: Add missing columns for older deployments — one execute per column
+        cursor.execute("""
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                           WHERE TABLE_NAME='Community' AND COLUMN_NAME='like_count')
+                ALTER TABLE Community ADD like_count INT NOT NULL DEFAULT 0
+        """)
+        conn.commit()
+
+        cursor.execute("""
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                           WHERE TABLE_NAME='Community' AND COLUMN_NAME='dislike_count')
+                ALTER TABLE Community ADD dislike_count INT NOT NULL DEFAULT 0
+        """)
+        conn.commit()
+
+        cursor.execute("""
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                           WHERE TABLE_NAME='Community' AND COLUMN_NAME='comment_count')
+                ALTER TABLE Community ADD comment_count INT NOT NULL DEFAULT 0
+        """)
+        conn.commit()
+
     finally:
         try: cursor.close()
         except: pass

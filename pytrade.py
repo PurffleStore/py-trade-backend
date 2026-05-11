@@ -598,8 +598,8 @@ def list_community_posts():
     """
     try:
         ensure_community_table_exists()
-    except Exception:
-        pass
+    except Exception as _e:
+        app.logger.warning("ensure_community_table_exists failed in /posts: %s", _e)
     limit_raw = request.args.get("limit", "50")
     offset_raw = request.args.get("offset", "0")
     try:
@@ -810,8 +810,8 @@ def get_comments(post_id: int):
 def community_stats():
     try:
         ensure_community_table_exists()
-    except Exception:
-        pass
+    except Exception as _e:
+        app.logger.warning("ensure_community_table_exists failed in /community/stats: %s", _e)
     conn = get_db_connection()
     cur = None
     try:
