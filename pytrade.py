@@ -531,351 +531,167 @@ def logout():
     return resp
 
 
-#community forum to post the data
+from community_db import get_conn as _cdb_conn, ensure_tables as _cdb_ensure
+_cdb_ensure()   # create SQLite tables once at import time
 
-# --- Add this API anywhere below other routes ---
+# ──────────────────────────────────────────────────────────────────────────────
+# COMMUNITY FORUM  (SQLite — no external DB needed)
+# ──────────────────────────────────────────────────────────────────────────────
+
 @app.post("/posts")
-@jwt_required
 def create_community_post():
-    """
-    TEMP: Open endpoint. Expects JSON:
-    { userId?, userName?, title?, category?, tags?, body }
-    """
+    """Open endpoint — no login required. { userName?, title?, category?, tags?, body }"""
     data = request.get_json(silent=True) or {}
-
-    user_id = int((data.get("userId") or 0))
     user_name = (data.get("userName") or "").strip() or "Guest"
-    title = (data.get("title") or "").strip()
-    category = (data.get("category") or "").strip()
-    tags = (data.get("tags") or "").strip()
-    body = (data.get("body") or "").strip()
-
+    title     = (data.get("title")    or "").strip()
+    category  = (data.get("category") or "").strip()
+    tags      = (data.get("tags")     or "").strip()
+    body      = (data.get("body")     or "").strip()
     if not body:
-        return jsonify({"message": "body is required"}), 400
-
-    conn = get_db_connection()
-    cursor = None
+        return jsonify({"error": "body is required"}), 400
     try:
-        cursor = conn.cursor()
-        # Return the new identity in the same statement (more reliable than SCOPE_IDENTITY())
-        cursor.execute("""
-            INSERT INTO Community (user_id, user_name, title, category, tags, body)
-            OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, user_name, title, category, tags, body))
-
-        row = cursor.fetchone()
+        conn = _cdb_conn()
+        cur = conn.execute(
+            "INSERT INTO Community (user_name, title, category, tags, body) VALUES (?,?,?,?,?)",
+            (user_name, title, category, tags, body)
+        )
         conn.commit()
-
-        if not row or row[0] is None:
-            return jsonify({"error": "Failed to retrieve new post id"}), 500
-
-        new_id = int(row[0]);
-
-        return jsonify({
-            "id": new_id,
-            "message": "Post created",
-            "userId": user_id,
-            "userName": user_name
-        }), 201
+        new_id = cur.lastrowid
+        conn.close()
+        return jsonify({"id": new_id, "message": "Post created", "userName": user_name}), 201
     except Exception as e:
         app.logger.exception("create_community_post failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cursor: cursor.close()
-        except:
-            pass
-        conn.close()
 
 
 @app.get("/posts")
 def list_community_posts():
-    """
-    List community posts (public). Supports paging:
-      GET /posts?limit=50&offset=0
-    Returns: { total, offset, limit, count, results: Post[] }
-    """
     try:
-        ensure_community_table_exists()
-    except Exception as _e:
-        app.logger.warning("ensure_community_table_exists failed in /posts: %s", _e)
-    limit_raw = request.args.get("limit", "50")
-    offset_raw = request.args.get("offset", "0")
-    try:
-        limit = max(1, min(200, int(limit_raw)))
+        limit  = max(1, min(200, int(request.args.get("limit",  "50"))))
+        offset = max(0, int(request.args.get("offset", "0")))
     except Exception:
-        limit = 50
+        limit, offset = 50, 0
     try:
-        offset = max(0, int(offset_raw))
-    except Exception:
-        offset = 0
-
-    conn = get_db_connection()
-    cur = None
-    try:
-        cur = conn.cursor()
-        # data page
-        cur.execute("""
-            SELECT
-                id,
-                user_id      AS userId,
-                user_name    AS userName,
-                title,
-                category,
-                tags,
-                body,
-                created_at   AS createdAt
-            FROM Community
-            ORDER BY created_at DESC
-            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-        """, (offset, limit))
-        rows = cur.fetchall()
-
+        conn  = _cdb_conn()
+        rows  = conn.execute(
+            "SELECT id,user_name,title,category,tags,body,like_count,dislike_count,comment_count,created_at "
+            "FROM Community ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM Community").fetchone()[0]
+        conn.close()
         posts = [
             {
-                "id": int(r[0]),
-                "userId": int(r[1]),
-                "userName": r[2],
-                "title": r[3],
-                "category": r[4],
-                "tags": r[5],
-                "body": r[6],
-                "createdAt": r[7].isoformat() if hasattr(r[7], "isoformat") else r[7],
+                "id":           r["id"],
+                "userId":       0,
+                "userName":     r["user_name"],
+                "title":        r["title"],
+                "category":     r["category"],
+                "tags":         r["tags"],
+                "body":         r["body"],
+                "likeCount":    r["like_count"],
+                "dislikeCount": r["dislike_count"],
+                "commentCount": r["comment_count"],
+                "createdAt":    r["created_at"],
             }
             for r in rows
         ]
-
-        # total count
-        cur.execute("SELECT COUNT(*) FROM Community")
-        total = int(cur.fetchone()[0])
-
-        return jsonify({
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "count": len(posts),
-            "results": posts
-        }), 200
+        return jsonify({"total": total, "offset": offset, "limit": limit,
+                        "count": len(posts), "results": posts}), 200
     except Exception as e:
         app.logger.exception("list_community_posts failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cur: cur.close()
-        except:
-            pass
-        conn.close()
 
 
-# --- Community: like a post ---
 @app.post("/posts/<int:post_id>/like")
-def like_post(post_id: int):
-    conn = get_db_connection()
-    cur = None
+def like_post(post_id):
     try:
-        cur = conn.cursor()
-        cur.execute("UPDATE Community SET like_count = ISNULL(like_count,0) + 1 WHERE id = ?", (post_id,))
+        conn = _cdb_conn()
+        conn.execute("UPDATE Community SET like_count = like_count + 1 WHERE id = ?", (post_id,))
         conn.commit()
-        cur.execute("SELECT ISNULL(like_count,0) FROM Community WHERE id = ?", (post_id,))
-        row = cur.fetchone()
-        return jsonify({"likeCount": int(row[0]) if row else 0}), 200
-    except Exception as e:
-        app.logger.exception("like_post failed")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cur: cur.close()
-        except: pass
+        count = conn.execute("SELECT like_count FROM Community WHERE id = ?", (post_id,)).fetchone()
         conn.close()
+        return jsonify({"likeCount": count[0] if count else 0}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-# --- Community: dislike a post ---
 @app.post("/posts/<int:post_id>/dislike")
-def dislike_post(post_id: int):
-    conn = get_db_connection()
-    cur = None
+def dislike_post(post_id):
     try:
-        cur = conn.cursor()
-        cur.execute("UPDATE Community SET dislike_count = ISNULL(dislike_count,0) + 1 WHERE id = ?", (post_id,))
+        conn = _cdb_conn()
+        conn.execute("UPDATE Community SET dislike_count = dislike_count + 1 WHERE id = ?", (post_id,))
         conn.commit()
-        cur.execute("SELECT ISNULL(dislike_count,0) FROM Community WHERE id = ?", (post_id,))
-        row = cur.fetchone()
-        return jsonify({"dislikeCount": int(row[0]) if row else 0}), 200
-    except Exception as e:
-        app.logger.exception("dislike_post failed")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cur: cur.close()
-        except: pass
+        count = conn.execute("SELECT dislike_count FROM Community WHERE id = ?", (post_id,)).fetchone()
         conn.close()
+        return jsonify({"dislikeCount": count[0] if count else 0}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-# --- Community: add comment to a post ---
 @app.post("/posts/<int:post_id>/comments")
-@jwt_required
-def add_comment(post_id: int):
-    data = request.get_json(silent=True) or {}
-    body = (data.get("body") or "").strip()
+def add_comment(post_id):
+    data      = request.get_json(silent=True) or {}
+    body      = (data.get("body")     or "").strip()
+    user_name = (data.get("userName") or "Guest").strip() or "Guest"
     if not body:
         return jsonify({"error": "body is required"}), 400
-
-    # derive author from JWT
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    user_name = "Guest"
     try:
-        import jwt as pyjwt
-        payload = pyjwt.decode(token, options={"verify_signature": False}, algorithms=["HS256"])
-        user_name = (payload.get("name") or payload.get("preferred_username") or
-                     " ".join(filter(None, [payload.get("given_name"), payload.get("family_name")])) or "Guest")
-    except Exception:
-        pass
-
-    conn = get_db_connection()
-    cur = None
-    try:
-        cur = conn.cursor()
-        # ensure CommunityComments table exists
-        cur.execute("""
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='CommunityComments')
-            CREATE TABLE CommunityComments (
-                id         INT IDENTITY PRIMARY KEY,
-                post_id    INT NOT NULL,
-                user_name  NVARCHAR(120),
-                body       NVARCHAR(MAX),
-                created_at DATETIME2 DEFAULT GETDATE()
-            )
-        """)
-        cur.execute("""
-            INSERT INTO CommunityComments (post_id, user_name, body)
-            OUTPUT INSERTED.id
-            VALUES (?, ?, ?)
-        """, (post_id, user_name, body))
-        row = cur.fetchone()
-        cur.execute("UPDATE Community SET comment_count = ISNULL(comment_count,0) + 1 WHERE id = ?", (post_id,))
+        conn = _cdb_conn()
+        cur  = conn.execute(
+            "INSERT INTO CommunityComments (post_id, user_name, body) VALUES (?,?,?)",
+            (post_id, user_name, body)
+        )
+        conn.execute("UPDATE Community SET comment_count = comment_count + 1 WHERE id = ?", (post_id,))
         conn.commit()
-        return jsonify({"id": int(row[0]) if row else 0, "message": "Comment added"}), 201
+        new_id = cur.lastrowid
+        conn.close()
+        return jsonify({"id": new_id, "message": "Comment added"}), 201
     except Exception as e:
         app.logger.exception("add_comment failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cur: cur.close()
-        except: pass
-        conn.close()
 
 
-# --- Community: get comments for a post ---
 @app.get("/posts/<int:post_id>/comments")
-def get_comments(post_id: int):
-    conn = get_db_connection()
-    cur = None
+def get_comments(post_id):
     try:
-        cur = conn.cursor()
-        cur.execute("""
-            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='CommunityComments')
-            CREATE TABLE CommunityComments (
-                id         INT IDENTITY PRIMARY KEY,
-                post_id    INT NOT NULL,
-                user_name  NVARCHAR(120),
-                body       NVARCHAR(MAX),
-                created_at DATETIME2 DEFAULT GETDATE()
-            )
-        """)
-        cur.execute("""
-            SELECT id, user_name, body, created_at
-            FROM CommunityComments WHERE post_id = ?
-            ORDER BY created_at ASC
-        """, (post_id,))
-        rows = cur.fetchall()
-        comments = [
-            {"id": int(r[0]), "userName": r[1], "body": r[2],
-             "createdAt": r[3].isoformat() if hasattr(r[3], "isoformat") else str(r[3])}
-            for r in rows
-        ]
-        return jsonify({"postId": post_id, "comments": comments}), 200
+        conn = _cdb_conn()
+        rows = conn.execute(
+            "SELECT id, user_name, body, created_at FROM CommunityComments "
+            "WHERE post_id = ? ORDER BY created_at ASC",
+            (post_id,)
+        ).fetchall()
+        conn.close()
+        return jsonify({
+            "postId": post_id,
+            "comments": [{"id": r[0], "userName": r[1], "body": r[2], "createdAt": r[3]} for r in rows]
+        }), 200
     except Exception as e:
-        app.logger.exception("get_comments failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cur: cur.close()
-        except: pass
-        conn.close()
 
 
-# --- Community: DB health check (temp debug endpoint) ---
-@app.get("/community/health")
-def community_health():
-    """Temp endpoint — open in browser to see exact DB error on live server."""
-    steps = []
-    try:
-        conn = get_db_connection()
-        steps.append("db_connect: OK")
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        steps.append("db_ping: OK")
-        cur.close()
-        conn.close()
-    except Exception as e:
-        steps.append(f"db_connect: FAILED — {e}")
-        return jsonify({"status": "error", "steps": steps}), 500
-
-    try:
-        ensure_community_table_exists()
-        steps.append("ensure_table: OK")
-    except Exception as e:
-        steps.append(f"ensure_table: FAILED — {e}")
-        return jsonify({"status": "error", "steps": steps}), 500
-
-    try:
-        conn2 = get_db_connection()
-        cur2 = conn2.cursor()
-        cur2.execute("SELECT COUNT(*) FROM Community")
-        count = cur2.fetchone()[0]
-        cur2.close()
-        conn2.close()
-        steps.append(f"select_community: OK (rows={count})")
-    except Exception as e:
-        steps.append(f"select_community: FAILED — {e}")
-        return jsonify({"status": "error", "steps": steps}), 500
-
-    return jsonify({"status": "ok", "steps": steps}), 200
-
-
-# --- Community: stats ---
 @app.get("/community/stats")
 def community_stats():
     try:
-        ensure_community_table_exists()
-    except Exception as _e:
-        app.logger.warning("ensure_community_table_exists failed in /community/stats: %s", _e)
-    conn = get_db_connection()
-    cur = None
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM Community")
-        total_posts = int(cur.fetchone()[0])
-        cur.execute("SELECT COUNT(DISTINCT user_name) FROM Community")
-        total_members = int(cur.fetchone()[0])
-        cur.execute("""
-            SELECT COUNT(*) FROM Community
-            WHERE created_at >= CAST(GETDATE() AS DATE)
-        """)
-        today_posts = int(cur.fetchone()[0])
-        cur.execute("""
-            SELECT TOP 5 category, COUNT(*) AS cnt
-            FROM Community WHERE category IS NOT NULL AND category <> ''
-            GROUP BY category ORDER BY cnt DESC
-        """)
-        top_cats = [{"category": r[0], "count": int(r[1])} for r in cur.fetchall()]
-        cur.execute("""
-            SELECT TOP 5 tags FROM Community
-            WHERE tags IS NOT NULL AND tags <> ''
-            ORDER BY created_at DESC
-        """)
-        tag_rows = cur.fetchall()
+        conn        = _cdb_conn()
+        total_posts = conn.execute("SELECT COUNT(*) FROM Community").fetchone()[0]
+        total_mem   = conn.execute("SELECT COUNT(DISTINCT user_name) FROM Community").fetchone()[0]
+        today_posts = conn.execute(
+            "SELECT COUNT(*) FROM Community WHERE date(created_at)=date('now')"
+        ).fetchone()[0]
+        top_cats = [
+            {"category": r[0], "count": r[1]}
+            for r in conn.execute(
+                "SELECT category, COUNT(*) cnt FROM Community "
+                "WHERE category IS NOT NULL AND category!='' "
+                "GROUP BY category ORDER BY cnt DESC LIMIT 5"
+            ).fetchall()
+        ]
+        tag_rows = conn.execute(
+            "SELECT tags FROM Community WHERE tags IS NOT NULL AND tags!='' "
+            "ORDER BY created_at DESC LIMIT 5"
+        ).fetchall()
+        conn.close()
         all_tags = []
         for rw in tag_rows:
             for t in str(rw[0]).split(","):
@@ -884,7 +700,7 @@ def community_stats():
                     all_tags.append(t)
         return jsonify({
             "totalPosts": total_posts,
-            "totalMembers": total_members,
+            "totalMembers": total_mem,
             "todayPosts": today_posts,
             "topCategories": top_cats,
             "popularTags": all_tags[:10],
@@ -892,11 +708,6 @@ def community_stats():
     except Exception as e:
         app.logger.exception("community_stats failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            if cur: cur.close()
-        except: pass
-        conn.close()
 
 
 # ------------------------------------------------------------------------------
