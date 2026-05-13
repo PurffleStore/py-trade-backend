@@ -269,8 +269,8 @@ def analysestock(ticker):
     overall_fa_signal = signal_from_score(overall_fa_score,15)
     overall_news_signal = signal_from_score(overall_news_score,5)
     combined_overall_score = overall_ta_score + overall_fa_score + overall_news_score
-    combined_overall_signal = np.where(combined_overall_score > 65, 'Buy',
-                                       np.where(combined_overall_score > 50, 'Neutral', 'DBuy'))
+    combined_overall_signal = np.where(combined_overall_score >= 60, 'Buy',
+                                       np.where(combined_overall_score > 45, 'Neutral', 'DBuy'))
 
 
     #trade recommendation

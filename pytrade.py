@@ -896,6 +896,143 @@ def get_quotes():
 
 
 # ------------------------------------------------------------------------------
+# STOCK SCREENER  — /screenerdata?code=NIFTY50[&refresh=1]
+# ------------------------------------------------------------------------------
+_screener_cache: dict = {}
+_SCREENER_TTL = 1800   # 30-minute cache
+
+def _rsi(close, period=14):
+    """Return last RSI value as float, or None."""
+    try:
+        if len(close) < period + 2:
+            return None
+        delta = close.diff().dropna()
+        gain  = delta.clip(lower=0).rolling(period).mean()
+        loss  = (-delta.clip(upper=0)).rolling(period).mean()
+        rs    = gain / loss.replace(0, float('nan'))
+        val   = (100 - 100 / (1 + rs)).dropna()
+        return round(float(val.iloc[-1]), 1) if len(val) else None
+    except Exception:
+        return None
+
+def _screener_row(ticker, company, df):
+    """Build one screener result dict from a normalised OHLCV dataframe."""
+    df   = df.dropna(subset=["close"])
+    if df.empty:
+        raise ValueError("no data")
+    cls  = df["close"]
+    vol  = df["volume"] if "volume" in df.columns else None
+
+    price      = round(float(cls.iloc[-1]), 2)
+    prev       = round(float(cls.iloc[-2]), 2) if len(cls) > 1 else price
+    chg        = round(price - prev, 2)
+    chg_pct    = round((chg / prev) * 100, 2) if prev else 0.0
+
+    hi52 = round(float(cls.max()), 2)
+    lo52 = round(float(cls.min()), 2)
+    rng  = hi52 - lo52
+    pos52 = round((price - lo52) / rng * 100, 1) if rng > 0 else 0.0
+
+    last_vol = int(vol.iloc[-1])  if vol is not None and not vol.empty else 0
+    avg_vol  = int(vol.tail(20).mean()) if vol is not None and not vol.empty else 0
+    vol_ratio = round(last_vol / avg_vol, 2) if avg_vol > 0 else 0.0
+
+    rsi_val = _rsi(cls)
+
+    if rsi_val is None:
+        signal = "N/A"
+    elif rsi_val < 30:
+        signal = "Strong Buy"
+    elif rsi_val < 45:
+        signal = "Buy"
+    elif rsi_val <= 55:
+        signal = "Neutral"
+    elif rsi_val <= 70:
+        signal = "Sell"
+    else:
+        signal = "Strong Sell"
+
+    return {
+        "symbol":     ticker,
+        "company":    company,
+        "price":      price,
+        "change":     chg,
+        "changePct":  chg_pct,
+        "volume":     last_vol,
+        "avgVolume":  avg_vol,
+        "volRatio":   vol_ratio,
+        "week52High": hi52,
+        "week52Low":  lo52,
+        "week52Pos":  pos52,
+        "rsi":        rsi_val,
+        "signal":     signal,
+    }
+
+@app.get("/screenerdata")
+def screener_data():
+    code    = request.args.get("code", "NIFTY50").strip().upper()
+    refresh = request.args.get("refresh", "0") == "1"
+
+    # cache check
+    hit = _screener_cache.get(code)
+    if hit and not refresh and (time.time() - hit["ts"]) < _SCREENER_TTL:
+        return jsonify(hit["data"])
+
+    # company list
+    try:
+        payload = build_companies_payload(code)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    if not payload or not payload.get("constituents"):
+        return jsonify({"error": f"No constituents for: {code}"}), 404
+
+    constituents = payload["constituents"][:100]   # cap at 100 for speed
+    tickers  = [c["symbol"] for c in constituents]
+    name_map = {c["symbol"]: c["company"] for c in constituents}
+
+    # batch OHLCV — 1 year daily
+    try:
+        raw = yf.download(
+            tickers, period="1y", interval="1d",
+            group_by="ticker", auto_adjust=True,
+            progress=False, threads=True,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Download failed: {e}"}), 500
+
+    results = []
+    single  = len(tickers) == 1
+
+    for ticker in tickers:
+        try:
+            if single:
+                df = raw.copy()
+                df.columns = [c.lower() if isinstance(c, str) else c[0].lower()
+                               for c in df.columns]
+            else:
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                df = raw[ticker].copy()
+                df.columns = [c.lower() for c in df.columns]
+            results.append(_screener_row(ticker, name_map.get(ticker, ticker), df))
+        except Exception:
+            continue
+
+    data = {
+        "code":     code,
+        "exchange": payload.get("exchange", ""),
+        "country":  payload.get("country", ""),
+        "currency": payload.get("currency", ""),
+        "asOf":     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "count":    len(results),
+        "results":  results,
+    }
+    _screener_cache[code] = {"ts": time.time(), "data": data}
+    return jsonify(data)
+
+
+# ------------------------------------------------------------------------------
 # Intraday price series for chart  (NEW)
 # ------------------------------------------------------------------------------
 @app.get("/getintraday")
