@@ -896,6 +896,145 @@ def get_quotes():
 
 
 # ------------------------------------------------------------------------------
+# India VIX  — /getvix
+# ------------------------------------------------------------------------------
+_vix_cache: dict = {}
+_VIX_TTL = 300   # 5-minute cache
+
+@app.get("/getvix")
+def get_vix():
+    """Returns India VIX value with 5-minute cache."""
+    now = time.time()
+    if _vix_cache.get("ts") and now - _vix_cache["ts"] < _VIX_TTL:
+        return jsonify(_vix_cache["data"]), 200
+    try:
+        t = yf.Ticker("^INDIAVIX")
+        hist = t.history(period="5d")
+        if hist is not None and not hist.empty:
+            closes = [float(v) for v in hist['Close'].dropna().values]
+            if len(closes) >= 2:
+                last = closes[-1]
+                prev = closes[-2]
+                chg = last - prev
+                chg_pct = (chg / prev * 100) if prev != 0 else 0.0
+                result = {"vix": round(last, 2), "chg": round(chg, 2), "chgPct": round(chg_pct, 2)}
+                _vix_cache["data"] = result
+                _vix_cache["ts"]   = now
+                return jsonify(result), 200
+    except Exception:
+        app.logger.exception("getvix failed")
+    return jsonify({"vix": None, "chg": None, "chgPct": None}), 200
+
+
+# ------------------------------------------------------------------------------
+# FII / DII Data  — /getfiidii
+# ------------------------------------------------------------------------------
+_fiidii_cache: dict = {}
+_FIIDII_TTL = 900   # 15-minute cache
+
+@app.get("/getfiidii")
+def get_fii_dii():
+    """Returns FII and DII net buy/sell data for the last 5 trading days from NSE."""
+    import requests as _req
+    now = time.time()
+    if _fiidii_cache.get("ts") and now - _fiidii_cache["ts"] < _FIIDII_TTL:
+        return jsonify(_fiidii_cache["data"]), 200
+    try:
+        session = _req.Session()
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/market-data/fii-dii-activity",
+        }
+        # prime cookies
+        session.get("https://www.nseindia.com/", headers=hdrs, timeout=8)
+        r = session.get("https://www.nseindia.com/api/fiidiiTradeReact", headers=hdrs, timeout=8)
+        raw = r.json()
+        # NSE returns list; each item has date, fiiNet, diiNet etc.
+        parsed = []
+        for item in (raw if isinstance(raw, list) else []):
+            try:
+                parsed.append({
+                    "date":    item.get("date", ""),
+                    "fiiNet":  float(str(item.get("fiiNet", 0) or 0).replace(",", "")),
+                    "diiNet":  float(str(item.get("diiNet", 0) or 0).replace(",", "")),
+                    "fiiBuy":  float(str(item.get("fiiBuyValue",  0) or 0).replace(",", "")),
+                    "fiiSell": float(str(item.get("fiiSaleValue", 0) or 0).replace(",", "")),
+                    "diiBuy":  float(str(item.get("diiBuyValue",  0) or 0).replace(",", "")),
+                    "diiSell": float(str(item.get("diiSaleValue", 0) or 0).replace(",", "")),
+                })
+            except Exception:
+                continue
+        result = {"rows": parsed[:5], "source": "NSE"}
+        _fiidii_cache["data"] = result
+        _fiidii_cache["ts"]   = now
+        return jsonify(result), 200
+    except Exception:
+        app.logger.exception("getfiidii NSE fetch failed")
+    # Fallback: return empty so UI shows graceful error
+    return jsonify({"rows": [], "source": "NSE", "error": "Data temporarily unavailable"}), 200
+
+
+# ------------------------------------------------------------------------------
+# Sector Heatmap  — /getsectorheatmap
+# ------------------------------------------------------------------------------
+_sector_cache: dict = {}
+_SECTOR_TTL = 600   # 10-minute cache
+
+_INDIA_SECTORS = [
+    ("IT",      "^CNXIT"),
+    ("Bank",    "^NSEBANK"),
+    ("Pharma",  "^CNXPHARMA"),
+    ("Auto",    "^CNXAUTO"),
+    ("FMCG",    "^CNXFMCG"),
+    ("Realty",  "^CNXREALTY"),
+    ("Metal",   "^CNXMETAL"),
+    ("Energy",  "^CNXENERGY"),
+    ("Infra",   "^CNXINFRA"),
+    ("Media",   "^CNXMEDIA"),
+    ("PSU",     "^CNXPSE"),
+    ("MNC",     "^CNXMNC"),
+]
+
+@app.get("/getsectorheatmap")
+def get_sector_heatmap():
+    """Returns India sector % change for the day with 10-minute cache."""
+    now = time.time()
+    if _sector_cache.get("ts") and now - _sector_cache["ts"] < _SECTOR_TTL:
+        return jsonify(_sector_cache["data"]), 200
+    try:
+        symbols = [sym for _, sym in _INDIA_SECTORS]
+        data = yf.download(
+            symbols, period="5d", interval="1d",
+            group_by="ticker", auto_adjust=True, progress=False
+        )
+        result = []
+        for name, sym in _INDIA_SECTORS:
+            try:
+                if sym in data.columns.get_level_values(0):
+                    closes = data[sym]["Close"].dropna().values
+                else:
+                    closes = data["Close"].dropna().values if len(symbols) == 1 else []
+                if len(closes) >= 2:
+                    last = float(closes[-1])
+                    prev = float(closes[-2])
+                    chg_pct = round((last - prev) / prev * 100, 2) if prev else 0.0
+                    result.append({"name": name, "chgPct": chg_pct, "price": round(last, 2)})
+                else:
+                    result.append({"name": name, "chgPct": 0.0, "price": 0.0})
+            except Exception:
+                result.append({"name": name, "chgPct": 0.0, "price": 0.0})
+        _sector_cache["data"] = result
+        _sector_cache["ts"]   = now
+        return jsonify(result), 200
+    except Exception:
+        app.logger.exception("getsectorheatmap failed")
+    return jsonify([{"name": n, "chgPct": 0.0, "price": 0.0} for n, _ in _INDIA_SECTORS]), 200
+
+
+# ------------------------------------------------------------------------------
 # STOCK SCREENER  — /screenerdata?code=NIFTY50[&refresh=1]
 # ------------------------------------------------------------------------------
 _screener_cache: dict = {}

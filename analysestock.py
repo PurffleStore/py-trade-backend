@@ -206,9 +206,16 @@ def analysestock(ticker):
     recentdays = stock_data.tail(30)
     ohlc_data = []
     for index, row in recentdays.iterrows():
+        vol = 0
+        try:
+            v = row.get('volume', 0) if hasattr(row, 'get') else row['volume']
+            vol = int(v) if not pd.isna(v) else 0
+        except Exception:
+            vol = 0
         ohlc_data.append({
             "x": index.strftime('%Y-%m-%d'),
-            "y": [round(row['open'], 2), round(row['high'], 2), round(row['low'], 2), round(row['close'], 2)]
+            "y": [round(row['open'], 2), round(row['high'], 2), round(row['low'], 2), round(row['close'], 2)],
+            "volume": vol
         })
 
     # TA Strategy signals
