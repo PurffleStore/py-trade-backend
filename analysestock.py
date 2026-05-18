@@ -285,6 +285,60 @@ def analysestock(ticker):
     pivot_levels = calculate_pivot_points(ticker, combined_overall_score, live_price)
 
 
+    # ── Earnings date ──────────────────────────────────────────
+    earnings_date = None
+    try:
+        cal = stockdetail.calendar
+        if isinstance(cal, dict):
+            ed = cal.get("Earnings Date")
+            if ed is None:
+                ed = cal.get("earningsDate") or cal.get("earnings_date")
+            if isinstance(ed, (list, tuple)) and len(ed) > 0:
+                ed = ed[0]
+            if hasattr(ed, 'strftime'):
+                earnings_date = ed.strftime('%Y-%m-%d')
+            elif ed is not None:
+                earnings_date = str(ed)[:10]
+        elif hasattr(cal, 'to_dict'):
+            # pandas DataFrame style calendar from older yfinance
+            d = cal.to_dict()
+            ed = None
+            for k in ('Earnings Date', 'earningsDate', 'earnings_date'):
+                if k in d:
+                    ed = list(d[k].values())[0] if d[k] else None
+                    break
+            if hasattr(ed, 'strftime'):
+                earnings_date = ed.strftime('%Y-%m-%d')
+            elif ed is not None:
+                earnings_date = str(ed)[:10]
+    except Exception:
+        earnings_date = None
+
+    # ── Relative Strength vs NIFTY 50 (1-month % return comparison) ──
+    relative_strength = None
+    relative_strength_label = None
+    try:
+        import yfinance as _yf
+        _end = now
+        _start = _end - datetime.timedelta(days=35)
+        _nifty = _yf.download('^NSEI', start=_start.strftime('%Y-%m-%d'),
+                              end=(_end + datetime.timedelta(days=1)).strftime('%Y-%m-%d'),
+                              interval='1d', progress=False)
+        if not _nifty.empty and len(_nifty) >= 2:
+            _nc = _nifty['Close'].to_numpy().flatten()
+            nifty_ret = (_nc[-1] - _nc[0]) / _nc[0] * 100
+            stock_ret = (live_price - float(stock_data['close'].iloc[-20])) / float(stock_data['close'].iloc[-20]) * 100 if len(stock_data) >= 20 else 0.0
+            relative_strength = round(float(stock_ret - nifty_ret), 2)
+            if relative_strength >= 3:
+                relative_strength_label = 'Outperforming'
+            elif relative_strength <= -3:
+                relative_strength_label = 'Underperforming'
+            else:
+                relative_strength_label = 'In-line'
+    except Exception:
+        relative_strength = None
+        relative_strength_label = None
+
     #prediiction
     forecast_15 = None
     try:
@@ -375,8 +429,11 @@ def analysestock(ticker):
         "EMA 50": ema_trade_signal['EMA_50'],
         "ADX_Indicator": adx_trade_signal['ADX_Indicator'],
         "PLUS_DI": adx_trade_signal['PLUS_DI'],
-        "MINUS_DI": adx_trade_signal['MINUS_DI']       
-    }  
+        "MINUS_DI": adx_trade_signal['MINUS_DI'],
+        "earnings_date": earnings_date,
+        "relative_strength": relative_strength,
+        "relative_strength_label": relative_strength_label
+    }
 
     # attach AI forecast and AI TA results
     response.update({

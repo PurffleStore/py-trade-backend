@@ -1452,6 +1452,220 @@ def get_global_indices():
 
     return jsonify(out), 200
 
+# ------------------------------------------------------------------------------
+# Multi-Timeframe OHLC  — /getohlc?ticker=RELIANCE.NS&period=6mo&interval=1d
+# ------------------------------------------------------------------------------
+_ohlc_cache: dict = {}
+_OHLC_TTL = 300   # 5-minute cache
+
+@app.get("/getohlc")
+def get_ohlc():
+    """Returns OHLC + volume for any ticker/period/interval with 5-min cache."""
+    ticker   = request.args.get("ticker", "").strip()
+    period   = request.args.get("period",   "6mo")
+    interval = request.args.get("interval", "1d")
+    if not ticker:
+        return jsonify({"error": "ticker required"}), 400
+
+    allowed_periods   = {"1mo","3mo","6mo","1y","2y","5y"}
+    allowed_intervals = {"1d","1wk","1mo"}
+    if period   not in allowed_periods:   period   = "6mo"
+    if interval not in allowed_intervals: interval = "1d"
+
+    cache_key = f"{ticker}_{period}_{interval}"
+    now = time.time()
+    hit = _ohlc_cache.get(cache_key)
+    if hit and now - hit["ts"] < _OHLC_TTL:
+        return jsonify(hit["data"]), 200
+
+    try:
+        end_date = (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        df = yf.download(ticker, period=period, interval=interval,
+                         auto_adjust=True, progress=False)
+        if df is None or df.empty:
+            return jsonify({"ticker": ticker, "ohlc": []}), 200
+
+        df.columns = [c[0].lower() if isinstance(c, tuple) else c.lower() for c in df.columns]
+        ohlc = []
+        for idx, row in df.iterrows():
+            try:
+                date_str = idx.strftime("%Y-%m-%d")
+                vol = 0
+                try:
+                    v = row.get("volume", 0)
+                    vol = int(v) if v and not (isinstance(v, float) and v != v) else 0
+                except Exception:
+                    vol = 0
+                ohlc.append({
+                    "x": date_str,
+                    "y": [round(float(row["open"]),2), round(float(row["high"]),2),
+                           round(float(row["low"]),2),  round(float(row["close"]),2)],
+                    "volume": vol
+                })
+            except Exception:
+                continue
+
+        data = {"ticker": ticker, "period": period, "interval": interval, "ohlc": ohlc}
+        _ohlc_cache[cache_key] = {"ts": now, "data": data}
+        return jsonify(data), 200
+    except Exception:
+        app.logger.exception("getohlc failed for %s", ticker)
+        return jsonify({"ticker": ticker, "ohlc": []}), 200
+
+
+# ------------------------------------------------------------------------------
+# Market Breadth — /getmarketbreadth  (NIFTY 50 advance/decline)
+# ------------------------------------------------------------------------------
+_breadth_cache: dict = {}
+_BREADTH_TTL = 300   # 5-minute cache
+
+_NIFTY50_TICKERS = [
+    "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
+    "HINDUNILVR.NS","ITC.NS","SBIN.NS","BHARTIARTL.NS","KOTAKBANK.NS",
+    "AXISBANK.NS","LT.NS","HCLTECH.NS","ASIANPAINT.NS","BAJFINANCE.NS",
+    "MARUTI.NS","TITAN.NS","SUNPHARMA.NS","ULTRACEMCO.NS","NESTLEIND.NS",
+    "WIPRO.NS","TECHM.NS","INDUSINDBK.NS","BAJAJFINSV.NS","TATAMOTORS.NS",
+    "TATASTEEL.NS","POWERGRID.NS","NTPC.NS","ONGC.NS","COALINDIA.NS",
+    "DIVISLAB.NS","CIPLA.NS","DRREDDY.NS","APOLLOHOSP.NS","ADANIENT.NS",
+    "ADANIPORTS.NS","GRASIM.NS","HEROMOTOCO.NS","EICHERMOT.NS","BRITANNIA.NS",
+    "BPCL.NS","IOC.NS","SHREECEM.NS","UPL.NS","TATACONSUM.NS",
+    "JSWSTEEL.NS","HINDALCO.NS","SBILIFE.NS","HDFCLIFE.NS","M&M.NS",
+]
+
+@app.get("/getmarketbreadth")
+def get_market_breadth():
+    """Returns NIFTY 50 advance/decline count with 5-min cache."""
+    now = time.time()
+    if _breadth_cache.get("ts") and now - _breadth_cache["ts"] < _BREADTH_TTL:
+        return jsonify(_breadth_cache["data"]), 200
+    try:
+        syms = _NIFTY50_TICKERS[:50]
+        df = yf.download(syms, period="2d", interval="1d",
+                         group_by="ticker", auto_adjust=True, progress=False)
+        advance = decline = unchanged = 0
+        top_gainers, top_losers = [], []
+        for sym in syms:
+            try:
+                if sym in df.columns.get_level_values(0):
+                    closes = df[sym]["Close"].dropna().values
+                else:
+                    continue
+                if len(closes) < 2:
+                    continue
+                chg = (closes[-1] - closes[-2]) / closes[-2] * 100
+                if   chg >  0.05: advance += 1; top_gainers.append((sym.replace(".NS",""), round(chg,2)))
+                elif chg < -0.05: decline += 1; top_losers.append((sym.replace(".NS",""), round(chg,2)))
+                else: unchanged += 1
+            except Exception:
+                continue
+
+        top_gainers.sort(key=lambda x: -x[1])
+        top_losers.sort(key=lambda x: x[1])
+        data = {
+            "advance":   advance,
+            "decline":   decline,
+            "unchanged": unchanged,
+            "total":     advance + decline + unchanged,
+            "advPct":    round(advance / max(advance+decline+unchanged,1) * 100, 1),
+            "topGainers": [{"sym": s, "chg": c} for s,c in top_gainers[:3]],
+            "topLosers":  [{"sym": s, "chg": c} for s,c in top_losers[:3]],
+        }
+        _breadth_cache["data"] = data
+        _breadth_cache["ts"]   = now
+        return jsonify(data), 200
+    except Exception:
+        app.logger.exception("getmarketbreadth failed")
+    return jsonify({"advance":0,"decline":0,"unchanged":0,"total":0,"advPct":0,"topGainers":[],"topLosers":[]}), 200
+
+
+# ------------------------------------------------------------------------------
+# Options Pulse — /getoptions?symbol=NIFTY  (PCR + Max Pain via NSE)
+# ------------------------------------------------------------------------------
+_options_cache: dict = {}
+_OPTIONS_TTL  = 300   # 5-minute cache
+
+@app.get("/getoptions")
+def get_options():
+    """Returns PCR, Max Pain and top OI strikes for NIFTY/BANKNIFTY/stocks via NSE."""
+    import requests as _req
+    symbol = request.args.get("symbol", "NIFTY").strip().upper()
+    now = time.time()
+    hit = _options_cache.get(symbol)
+    if hit and now - hit["ts"] < _OPTIONS_TTL:
+        return jsonify(hit["data"]), 200
+
+    try:
+        sess = _req.Session()
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": "https://www.nseindia.com/option-chain",
+        }
+        # prime cookies
+        sess.get("https://www.nseindia.com/", headers=hdrs, timeout=8)
+        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+        r   = sess.get(url, headers=hdrs, timeout=8)
+        raw = r.json()
+
+        records = raw.get("records", {}).get("data", [])
+        expiries = raw.get("records", {}).get("expiryDates", [])
+        exp = expiries[0] if expiries else None   # nearest expiry
+
+        call_oi: dict = {}   # strike → call OI
+        put_oi:  dict = {}   # strike → put OI
+        total_call_oi = 0
+        total_put_oi  = 0
+
+        for item in records:
+            if exp and item.get("expiryDate") != exp:
+                continue
+            strike = item.get("strikePrice", 0)
+            ce = item.get("CE", {})
+            pe = item.get("PE", {})
+            coi = ce.get("openInterest", 0) or 0
+            poi = pe.get("openInterest", 0) or 0
+            call_oi[strike] = coi
+            put_oi[strike]  = poi
+            total_call_oi  += coi
+            total_put_oi   += poi
+
+        pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi else 0
+
+        # Max Pain: strike where total value of ITM options is minimum for writers
+        strikes = sorted(set(list(call_oi.keys()) + list(put_oi.keys())))
+        max_pain_strike = 0
+        min_pain_val    = float("inf")
+        for s in strikes:
+            pain = sum(max(0, s - k) * call_oi.get(k, 0) for k in strikes) + \
+                   sum(max(0, k - s) * put_oi.get(k, 0)  for k in strikes)
+            if pain < min_pain_val:
+                min_pain_val    = pain
+                max_pain_strike = s
+
+        # Top 5 Call & Put OI strikes
+        top_calls = sorted(call_oi.items(), key=lambda x: -x[1])[:5]
+        top_puts  = sorted(put_oi.items(),  key=lambda x: -x[1])[:5]
+
+        data = {
+            "symbol":        symbol,
+            "expiry":        exp,
+            "pcr":           pcr,
+            "pcrSignal":     "Bullish" if pcr > 1.2 else ("Bearish" if pcr < 0.7 else "Neutral"),
+            "maxPain":       max_pain_strike,
+            "totalCallOI":   total_call_oi,
+            "totalPutOI":    total_put_oi,
+            "topCalls":      [{"strike": s, "oi": o} for s, o in top_calls],
+            "topPuts":       [{"strike": s, "oi": o} for s, o in top_puts],
+        }
+        _options_cache[symbol] = {"ts": now, "data": data}
+        return jsonify(data), 200
+    except Exception:
+        app.logger.exception("getoptions failed for %s", symbol)
+    return jsonify({"symbol": symbol, "pcr": None, "maxPain": None,
+                    "topCalls": [], "topPuts": [], "error": "NSE data unavailable"}), 200
+
+
 if __name__ == "__main__":
     # When invoked directly, start the Flask development server.
     # Use environment variables to control port and debug mode.
