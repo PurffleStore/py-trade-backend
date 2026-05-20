@@ -192,13 +192,23 @@ def analysestock(ticker):
     stock_data.columns = [col.lower() if isinstance(col, str) else col[0].lower() for col in stock_data.columns]
     lasttradingdate = stock_data.index[-1].strftime('%d-%m-%Y')
     stockdetail = yf.Ticker(ticker)
-    company_name = stockdetail.info.get("longName", "Company name not found")
-    live_price = stockdetail.info["regularMarketPrice"]
-    price_change = stockdetail.info['regularMarketChange']
-    percentage_change = stockdetail.info['regularMarketChangePercent']
+    _info = stockdetail.info  # fetch once — avoids repeated network calls
+    company_name = _info.get("longName", "Company name not found")
 
-    week52_high = round(float(stockdetail.info.get("fiftyTwoWeekHigh") or 0), 2)
-    week52_low  = round(float(stockdetail.info.get("fiftyTwoWeekLow")  or 0), 2)
+    # Use .get() with fallback chain so None/missing keys never crash
+    live_price = (_info.get("regularMarketPrice")
+                  or _info.get("currentPrice")
+                  or _info.get("previousClose"))
+    if not live_price:
+        # last resort: use latest close from downloaded data
+        live_price = float(stock_data['close'].iloc[-1])
+    live_price = float(live_price)
+
+    price_change = float(_info.get('regularMarketChange') or 0)
+    percentage_change = float(_info.get('regularMarketChangePercent') or 0)
+
+    week52_high = round(float(_info.get("fiftyTwoWeekHigh") or 0), 2)
+    week52_low  = round(float(_info.get("fiftyTwoWeekLow")  or 0), 2)
     _range = week52_high - week52_low
     week52_position = round((live_price - week52_low) / _range * 100, 1) if _range > 0 else 0.0
     week52_signal = "Near High" if week52_position >= 80 else ("Near Low" if week52_position <= 20 else "Mid Range")

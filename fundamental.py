@@ -8,18 +8,26 @@ def get_fundamental_details(ticker):
     stock = yf.Ticker(ticker)
 
     # Fetch fundamental data and financial statements
-    fundamental_data = stock.info   
+    fundamental_data = stock.info
     income_statement = stock.financials
     balance_sheet = stock.balance_sheet
     cash_flow_statement = stock.cashflow
 
-   
-    current_net_income = income_statement.loc['Net Income'].iloc[0]  
-    previous_net_income = income_statement.loc['Net Income'].iloc[1] 
+    # Guard against empty DataFrames or missing 'Net Income' row
+    try:
+        if not income_statement.empty and 'Net Income' in income_statement.index:
+            current_net_income  = income_statement.loc['Net Income'].iloc[0]
+            previous_net_income = income_statement.loc['Net Income'].iloc[1] if len(income_statement.loc['Net Income']) > 1 else None
+        else:
+            current_net_income = None
+            previous_net_income = None
+    except Exception:
+        current_net_income = None
+        previous_net_income = None
 
-    earnings_growth_yoy = 'N/A'
+    earnings_growth_yoy = None  # None so numeric comparisons below won't crash
     # Calculate Earnings Growth (YoY)
-    if current_net_income is not None and previous_net_income is not None:
+    if current_net_income is not None and previous_net_income is not None and previous_net_income != 0:
         earnings_growth_yoy = ((current_net_income - previous_net_income) / previous_net_income) * 100       
      
     current_assets = balance_sheet.loc['Current Assets'].iloc[0] if 'Current Assets' in balance_sheet.index else None
@@ -135,7 +143,7 @@ def get_fundamental_details(ticker):
     overall_fa_score += revenue_growth_weight if revenue_growth_status == "good" else 0
   
 
-    earnings_growth = stock.info.get('earningsGrowth', None)
+    earnings_growth = fundamental_data.get('earningsGrowth', None)  # reuse already-fetched info
 
     peg_ratio = None
     if pe_ratio is not None and earnings_growth is not None and earnings_growth != 0:
