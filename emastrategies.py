@@ -130,11 +130,11 @@ def ema_strategies(data):
 def get_ema_trade_signal(data):
     ema_signals, overallscore, final_signal,ema5, ema_20, ema_50 = ema_strategies(data)
 
-    ema5_series = pd.Series(ema5, index=data.index).dropna().tail(100)
+    ema5_series = pd.Series(ema5, index=data.index).dropna().tail(200)
     ema5_series.index = ema5_series.index.strftime('%Y-%m-%d')
-    ema_20_series = pd.Series(ema_20, index=data.index).dropna().tail(100)
+    ema_20_series = pd.Series(ema_20, index=data.index).dropna().tail(200)
     ema_20_series.index = ema_20_series.index.strftime('%Y-%m-%d')
-    ema_50_series = pd.Series(ema_50, index=data.index).dropna().tail(100)
+    ema_50_series = pd.Series(ema_50, index=data.index).dropna().tail(200)
     ema_50_series.index = ema_50_series.index.strftime('%Y-%m-%d')
     return {
         "ema_signals": ema_signals,

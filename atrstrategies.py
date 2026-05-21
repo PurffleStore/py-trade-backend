@@ -12,7 +12,8 @@ def calculate_atr(data):
     return atr
 
 # ATR Breakout Strategy (Price crossing ATR threshold)
-def atr_breakout_strategy(data, atr, multiplier=2):
+# multiplier=1.5 (was 2) for short-term swing: tighter bands catch more swing breakouts
+def atr_breakout_strategy(data, atr, multiplier=1.5):
     latest_close = data['close'].iloc[-2]
     previous_close = data['close'].iloc[-1]
     latest_atr = atr.iloc[-2]
@@ -146,7 +147,7 @@ def atr_strategies(data):
 # API-style function to fetch ATR signals
 def get_atr_trade_signal(data):
     atr_signals, overallscore, final_signal,atr = atr_strategies(data)
-    atr_series = pd.Series(atr, index=data.index).dropna().tail(100)
+    atr_series = pd.Series(atr, index=data.index).dropna().tail(200)
     atr_series.index = atr_series.index.strftime('%Y-%m-%d')
     return {
         "atr_signals": atr_signals,

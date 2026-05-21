@@ -8,7 +8,9 @@ import datetime
 
     
 # Calculate MACD, Signal and Histogram
-def calculate_macdvalue(data, fast=12, slow=26, signal=9):
+# Faster MACD (8, 21, 9) vs standard (12, 26, 9) — better suited for short-term
+# swing trading (2–10 day holds) as it generates signals 2–3 days earlier.
+def calculate_macdvalue(data, fast=8, slow=21, signal=9):
     
     close_prices = data['close']
 
@@ -221,12 +223,12 @@ def get_macd_trade_signal(data):
     macd_signals, overallscore, final_signal = macd_strategies(data)
     macd_line, signal_line, hist = calculate_macdvalue(data)
     # Format and convert MACD and Signal Line for last 100 days
-    macd_series = pd.Series(macd_line, index=data.index).dropna().tail(100)
-    signal_series = pd.Series(signal_line, index=data.index).dropna().tail(100)
+    macd_series = pd.Series(macd_line, index=data.index).dropna().tail(200)
+    signal_series = pd.Series(signal_line, index=data.index).dropna().tail(200)
 
     macd_series.index = macd_series.index.strftime('%Y-%m-%d')
     signal_series.index = signal_series.index.strftime('%Y-%m-%d')
-    hist_series = pd.Series(hist, index=data.index).dropna().tail(100)
+    hist_series = pd.Series(hist, index=data.index).dropna().tail(200)
     hist_series.index = hist_series.index.strftime('%Y-%m-%d')
 
     return {

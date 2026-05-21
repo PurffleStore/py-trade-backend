@@ -103,9 +103,9 @@ def bollinger_strategies(data):
     total_score = 0
     for strategy, weight in weights.items():
         signal = signals[strategy]
-        if "Bullish" in signal or "Breakout Up" in signal or "Squeeze" in signal or "Pullback" in signal:
+        if signal == "Bullish":
             total_score += weight
-        elif "Neutral" in signal or "No Breakout" in signal:
+        elif signal == "Neutral":
             total_score += weight * 0.5
 
     overall_percentage = round((total_score / sum(weights.values())) * 100, 2)

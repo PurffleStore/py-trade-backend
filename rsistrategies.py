@@ -128,7 +128,7 @@ def get_rsi_divergence_signal(df):
 
     left = 5
     right = 5
-    max_range = 20
+    max_range = 15   # tightened from 20 → 15 bars for short-term swing relevance
 
     recent_idx = len(prices) - 1  # latest candle
     start_idx = max(recent_idx - max_range, left)
@@ -215,7 +215,9 @@ def rsi_strategies(df):
 
     return signals, overall_percentage, final_signal
 
-def extract_series(data, column_name, days=100):
+def extract_series(data, column_name, days=200):
+    # Use 200 days so no recent data point is accidentally trimmed by a small window.
+    # dropna() only removes NaN warm-up rows at the start — the latest date is preserved.
     series = data[[column_name]].dropna().tail(days)
     series.index = series.index.strftime('%Y-%m-%d')
     return series[column_name].round(2).to_dict()

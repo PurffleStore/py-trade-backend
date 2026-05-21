@@ -38,16 +38,26 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # ===================== TA scoring =====================
 def calculate_technical_analysis_score(indicator_scores):
+    # Short-term swing trading weights (2–10 day holds on daily bars):
+    # • Price Action (BOS/CHoCH/FVG/Order Block) → highest: primary entry signals
+    # • S/R levels → very high: defines entry and exit zones
+    # • RSI (RSI-5 fast + swing rejection) → high: momentum timing
+    # • EMA 5/20/50 → high: trend direction filter
+    # • Bollinger Bands → elevated: BB Squeeze → breakout is the classic swing setup
+    # • ATR → moderate: volatility context for stop-loss sizing
+    # • MACD → reduced: now uses faster (8,21,9) but still a lagging indicator
+    # • ADX → moderate: trend strength confirmation
+    # • Fibonacci → kept low: retracement levels useful but secondary for swing
     indicator_weights = {
-        'RSI': 13,
-        'MACD': 13,
-        'ATR': 5,
-        'ADX': 4,
-        'EMA': 13,
-        'PriceAction': 14,
-        'Bollinger': 10,
+        'RSI': 15,
+        'MACD': 10,
+        'ATR': 6,
+        'ADX': 5,
+        'EMA': 14,
+        'PriceAction': 18,
+        'Bollinger': 12,
         'Fibonacci': 4,
-        'SR': 9
+        'SR': 16
     }
     weight_values = list(indicator_weights.values())
     weighted_score = sum(score * weight for score, weight in zip(indicator_scores, weight_values))
